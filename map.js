@@ -296,45 +296,34 @@ const WMSLayerManager = {
         });
     },
 
-    // Hàm format giá trị cho từng loại thuộc tính
-    formatPropertyValue: function (key, value) {
-        // Định nghĩa các giá trị cho các mã
-        const ldlrMap = {
-            TXDG: "Trồng xen dưới gỗ",
-            // Thêm các mã khác nếu cần
-        };
-
-        const mdsdMap = {
-            VQG: "Vườn quốc gia",
-            // Thêm các mã khác nếu cần
-        };
-
-        const paMap = {
-            BV: "Bảo vệ",
-            // Thêm các mã khác nếu cần
-        };
-
-        const pkcnMap = {
-            BVNN: "Bảo vệ nghiêm ngặt",
-            // Thêm các mã khác nếu cần
-        };
-
-        // Format theo loại thuộc tính
-        switch (key) {
-            case "dtich":
-                return value ? `${value.toFixed(2)} ha` : "";
-            case "ldlr":
-                return `${value} - ${ldlrMap[value] || value}`;
-            case "mdsd":
-                return `${value} - ${mdsdMap[value] || value}`;
-            case "pa":
-                return `${value} - ${paMap[value] || value}`;
-            case "pkcn_ht":
-            case "pkcn_qh":
-                return `${value} - ${pkcnMap[value] || value}`;
-            default:
-                return value || "";
+    // Hàm lấy kiểu dữ liệu và format cho field
+    getFieldFormat: function (key, value) {
+        // Kiểm tra nếu là số
+        if (typeof value === "number") {
+            switch (key) {
+                case "dtich":
+                    return {
+                        digitSeparator: true,
+                        places: 2,
+                    };
+                case "namtr":
+                case "captuoi":
+                case "matinh":
+                case "mahuyen":
+                case "maxa":
+                    return {
+                        digitSeparator: true,
+                        places: 0,
+                    };
+                default:
+                    // Cho các số khác
+                    return value % 1 === 0
+                        ? { digitSeparator: true, places: 0 }
+                        : { digitSeparator: true, places: 2 };
+            }
         }
+        // Trường hợp không phải số thì return null
+        return null;
     },
 
     // Hàm lấy nhãn hiển thị cho thuộc tính
@@ -346,48 +335,93 @@ const WMSLayerManager = {
             tk: "Tiểu khu",
             khoanh: "Khoảnh",
             lo: "Lô",
-            dtich: "Diện tích",
+            dtich: "Diện tích (ha)",
             ldlr: "Loại đất lâm nghiệp",
             mdsd: "Mục đích sử dụng",
             churung: "Chủ rừng",
             pa: "Phương án",
             pkcn_ht: "Phân khu chức năng hiện trạng",
             pkcn_qh: "Phân khu chức năng quy hoạch",
+            namtr: "Năm trồng",
+            captuoi: "Cấp tuổi",
+            ddanh: "Địa danh",
+            tobando: "Tờ bản đồ",
+            // Thêm các label khác tùy theo data
         };
-        return labelMap[key] || key;
+        return labelMap[key] || this.formatKeyToLabel(key);
     },
 
-    // Hàm lọc và sắp xếp các thuộc tính cần hiển thị
-    getDisplayProperties: function (properties) {
-        // Danh sách các thuộc tính cần hiển thị theo thứ tự
-        const displayOrder = [
-            "tinh",
-            "huyen",
-            "xa",
-            "tk",
-            "khoanh",
-            "lo",
-            "dtich",
-            "ldlr",
-            "mdsd",
-            "churung",
-            "pa",
-            "pkcn_ht",
-            "pkcn_qh",
-        ];
-
-        return displayOrder
-            .filter((key) => properties.hasOwnProperty(key))
-            .map((key) => ({
-                key: key,
-                label: this.getPropertyLabel(key),
-                value: this.formatPropertyValue(key, properties[key]),
-            }));
+    // Hàm format key thành label khi không có trong labelMap
+    formatKeyToLabel: function (key) {
+        return key
+            .split("_")
+            .map(
+                (word) =>
+                    word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+            )
+            .join(" ");
     },
 
+    // Tạo template động cho popup
     createPopupTemplate: function (result) {
+        if (!result.data || !result.data[0]) return null;
+
+        const feature = result.data[0];
+        const properties = feature.properties;
+
+        // Tạo fieldInfos động từ properties
+        const fieldInfos = Object.entries(properties)
+            .filter(([key, value]) => {
+                // Lọc bỏ các trường không cần hiển thị
+                const excludedFields = ["id", "geometry_name", "geom"];
+                return (
+                    !excludedFields.includes(key) &&
+                    value !== null &&
+                    value !== ""
+                );
+            })
+            .map(([key, value]) => {
+                // Tạo field info cho mỗi property
+                const fieldInfo = {
+                    fieldName: key,
+                    label: this.getPropertyLabel(key),
+                    visible: true,
+                };
+
+                // Thêm format nếu là số
+                const format = this.getFieldFormat(key, value);
+                if (format) {
+                    fieldInfo.format = format;
+                }
+
+                return fieldInfo;
+            })
+            // Sắp xếp các trường theo thứ tự ưu tiên
+            .sort((a, b) => {
+                const orderPriority = [
+                    "tinh",
+                    "huyen",
+                    "xa",
+                    "tk",
+                    "khoanh",
+                    "lo",
+                    "dtich",
+                    "ldlr",
+                    "mdsd",
+                    "churung",
+                    "pa",
+                ];
+                const aIndex = orderPriority.indexOf(a.fieldName);
+                const bIndex = orderPriority.indexOf(b.fieldName);
+
+                if (aIndex === -1 && bIndex === -1) return 0;
+                if (aIndex === -1) return 1;
+                if (bIndex === -1) return -1;
+                return aIndex - bIndex;
+            });
+
         return {
-            title: `{churung}`,
+            title: properties.churung || "Thông tin khu vực",
             content: [
                 {
                     type: "text",
@@ -403,74 +437,19 @@ const WMSLayerManager = {
                 },
                 {
                     type: "fields",
-                    fieldInfos: [
-                        {
-                            fieldName: "tinh",
-                            label: "Tỉnh",
-                        },
-                        {
-                            fieldName: "huyen",
-                            label: "Huyện",
-                        },
-                        {
-                            fieldName: "xa",
-                            label: "Xã",
-                        },
-                        {
-                            fieldName: "tk",
-                            label: "Tiểu khu",
-                        },
-                        {
-                            fieldName: "khoanh",
-                            label: "Khoảnh",
-                        },
-                        {
-                            fieldName: "lo",
-                            label: "Lô",
-                        },
-                        {
-                            fieldName: "dtich",
-                            label: "Diện tích (ha)",
-                            format: {
-                                digitSeparator: true,
-                                places: 2,
-                            },
-                        },
-                        {
-                            fieldName: "ldlr",
-                            label: "Loại đất lâm nghiệp",
-                        },
-                        {
-                            fieldName: "mdsd",
-                            label: "Mục đích sử dụng",
-                        },
-                        {
-                            fieldName: "churung",
-                            label: "Chủ rừng",
-                        },
-                        {
-                            fieldName: "pa",
-                            label: "Phương án",
-                        },
-                        {
-                            fieldName: "pkcn_ht",
-                            label: "Phân khu chức năng hiện trạng",
-                        },
-                        {
-                            fieldName: "pkcn_qh",
-                            label: "Phân khu chức năng quy hoạch",
-                        },
-                    ],
+                    fieldInfos: fieldInfos,
                 },
                 {
                     type: "text",
-                    text: `<div class="source-info text-right">
-                        <small class="text-muted">
-                            Thời gian truy vấn: ${new Date().toLocaleString(
-                                "vi-VN"
-                            )}
-                        </small>
-                    </div>`,
+                    text: `
+                        <div class="source-info">
+                            <small class="text-muted">
+                                Thời gian truy vấn: ${new Date().toLocaleString(
+                                    "vi-VN"
+                                )}
+                            </small>
+                        </div>
+                    `,
                 },
             ],
         };
@@ -524,30 +503,7 @@ const WMSLayerManager = {
                         latitude: result.clickPoint.latitude,
                         spatialReference: { wkid: 4326 },
                     },
-                    attributes: {
-                        ...feature.properties,
-                        // Format các giá trị đặc biệt
-                        ldlr: this.formatPropertyValue(
-                            "ldlr",
-                            feature.properties.ldlr
-                        ),
-                        mdsd: this.formatPropertyValue(
-                            "mdsd",
-                            feature.properties.mdsd
-                        ),
-                        pa: this.formatPropertyValue(
-                            "pa",
-                            feature.properties.pa
-                        ),
-                        pkcn_ht: this.formatPropertyValue(
-                            "pkcn_ht",
-                            feature.properties.pkcn_ht
-                        ),
-                        pkcn_qh: this.formatPropertyValue(
-                            "pkcn_qh",
-                            feature.properties.pkcn_qh
-                        ),
-                    },
+                    attributes: feature.properties,
                 });
 
                 // Tạo và áp dụng template
