@@ -27,44 +27,57 @@ const WMS_LAYERS = [
 
 // Module-level function để xử lý WMS layers
 const WMSLayerManager = {
-    createAndAddWMSLayer: function(config) {
+    createAndAddWMSLayer: function (config) {
         return new Promise((resolve, reject) => {
-            require(["esri/layers/WMSLayer"], function(WMSLayer) {
+            require(["esri/layers/WMSLayer"], function (WMSLayer) {
                 console.log(`Creating WMS layer for: ${config.id}`);
                 const wmsLayer = new WMSLayer({
                     url: config.url,
-                    sublayers: [{
-                        name: config.layer
-                    }],
+                    sublayers: [
+                        {
+                            name: config.layer,
+                        },
+                    ],
                     version: config.version,
                     customParameters: {
                         transparent: true,
-                        format: "image/png"
+                        format: "image/png",
                     },
-                    opacity: 0.8
+                    opacity: 0.8,
                 });
 
-                wmsLayer.load().then(() => {
-                    console.log(`WMS layer ${config.id} loaded successfully`);
-                    _map.add(wmsLayer);
-                    _wmsLayers.set(config.id, wmsLayer);
-                    
-                    // Cập nhật UI
-                    const button = document.querySelector(`button[data-wms-id="${config.id}"]`);
-                    if (button) {
-                        button.classList.add('active');
-                        button.innerHTML = '<i class="bi bi-eye-slash"></i>';
-                    }
-                    resolve(wmsLayer);
-                }).catch(error => {
-                    console.error(`Error loading WMS layer ${config.id}:`, error);
-                    reject(error);
-                });
+                wmsLayer
+                    .load()
+                    .then(() => {
+                        console.log(
+                            `WMS layer ${config.id} loaded successfully`
+                        );
+                        _map.add(wmsLayer);
+                        _wmsLayers.set(config.id, wmsLayer);
+
+                        // Cập nhật UI
+                        const button = document.querySelector(
+                            `button[data-wms-id="${config.id}"]`
+                        );
+                        if (button) {
+                            button.classList.add("active");
+                            button.innerHTML =
+                                '<i class="bi bi-eye-slash"></i>';
+                        }
+                        resolve(wmsLayer);
+                    })
+                    .catch((error) => {
+                        console.error(
+                            `Error loading WMS layer ${config.id}:`,
+                            error
+                        );
+                        reject(error);
+                    });
             });
         });
     },
 
-    removeWMSLayer: function(wmsId) {
+    removeWMSLayer: function (wmsId) {
         const wmsLayer = _wmsLayers.get(wmsId);
         if (wmsLayer) {
             _map.remove(wmsLayer);
@@ -72,11 +85,11 @@ const WMSLayerManager = {
         }
     },
 
-    loadDefaultWMSLayers: function() {
+    loadDefaultWMSLayers: function () {
         console.log("Loading default WMS layers...");
-        const defaultLayers = WMS_LAYERS
-            .filter(config => config.defaultVisible)
-            .sort((a, b) => a.zoomPriority - b.zoomPriority);
+        const defaultLayers = WMS_LAYERS.filter(
+            (config) => config.defaultVisible
+        ).sort((a, b) => a.zoomPriority - b.zoomPriority);
 
         console.log("Default layers to load:", defaultLayers);
 
@@ -85,51 +98,509 @@ const WMSLayerManager = {
             return;
         }
 
-        const loadPromises = defaultLayers.map(config => this.createAndAddWMSLayer(config));
+        const loadPromises = defaultLayers.map((config) =>
+            this.createAndAddWMSLayer(config)
+        );
 
         Promise.all(loadPromises)
             .then(() => {
                 console.log("All default layers loaded");
                 if (defaultLayers.length > 0) {
                     const highestPriorityLayer = defaultLayers[0];
-                    zoomToWMSExtent(highestPriorityLayer.url, highestPriorityLayer.layer.split(':')[1]);
+                    zoomToWMSExtent(
+                        highestPriorityLayer.url,
+                        highestPriorityLayer.layer.split(":")[1]
+                    );
                 }
             })
-            .catch(error => {
+            .catch((error) => {
                 console.error("Error loading default layers:", error);
             });
-    }
+    },
+
+    // Hàm truy vấn thông tin WMS
+    getFeatureInfo: function (event, wmsLayer, wmsConfig) {
+        console.log("Starting getFeatureInfo");
+
+        return new Promise((resolve, reject) => {
+            require(["esri/geometry/support/webMercatorUtils"], (
+                webMercatorUtils
+            ) => {
+                // Lấy thông tin click point
+                const screenPoint = event.screenPoint;
+                const mapPoint = event.mapPoint;
+                const view = _view;
+
+                // Xử lý tọa độ click - chuẩn hóa về WGS84
+                let clickPointWGS84;
+                if (mapPoint.spatialReference.wkid === 4326) {
+                    clickPointWGS84 = mapPoint;
+                } else if (
+                    mapPoint.spatialReference.wkid === 102100 ||
+                    mapPoint.spatialReference.wkid === 3857
+                ) {
+                    clickPointWGS84 =
+                        webMercatorUtils.webMercatorToGeographic(mapPoint);
+                    if (!clickPointWGS84) {
+                        console.error("Failed to convert click point to WGS84");
+                        return;
+                    }
+                }
+
+                // Xử lý extent cho bbox
+                const extent = view.extent;
+                let bboxForWMS;
+                let targetSRS = "EPSG:4326";
+
+                if (extent.spatialReference.wkid === 4326) {
+                    bboxForWMS = extent;
+                } else if (
+                    extent.spatialReference.wkid === 102100 ||
+                    extent.spatialReference.wkid === 3857
+                ) {
+                    try {
+                        bboxForWMS =
+                            webMercatorUtils.webMercatorToGeographic(extent);
+                        if (!bboxForWMS) {
+                            console.error("Failed to convert extent to WGS84");
+                            return;
+                        }
+                    } catch (error) {
+                        console.error("Error converting extent:", error);
+                        return;
+                    }
+                }
+
+                // Tính toán tọa độ pixel
+                const pixelX = Math.round(screenPoint.x);
+                const pixelY = Math.round(screenPoint.y);
+
+                // Tạo URL GetFeatureInfo
+                const url = new URL(wmsConfig.url);
+                const params = new URLSearchParams({
+                    SERVICE: "WMS",
+                    VERSION: wmsConfig.version,
+                    REQUEST: "GetFeatureInfo",
+                    LAYERS: wmsConfig.layer,
+                    QUERY_LAYERS: wmsConfig.layer,
+                    STYLES: "",
+                    BBOX: `${bboxForWMS.xmin},${bboxForWMS.ymin},${bboxForWMS.xmax},${bboxForWMS.ymax}`,
+                    WIDTH: view.width,
+                    HEIGHT: view.height,
+                    FORMAT: "image/png",
+                    INFO_FORMAT: "application/json",
+                    SRS: targetSRS,
+                    X: pixelX,
+                    Y: pixelY,
+                    TRANSPARENT: "true",
+                });
+
+                const getFeatureInfoUrl = `${url.origin}${
+                    url.pathname
+                }?${params.toString()}`;
+                console.log("GetFeatureInfo URL:", getFeatureInfoUrl);
+
+                // Thực hiện request
+                const xhr = new XMLHttpRequest();
+                xhr.open("GET", getFeatureInfoUrl, true);
+
+                xhr.onload = () => {
+                    if (xhr.status === 200) {
+                        try {
+                            const responseText = xhr.responseText.trim();
+
+                            // Kiểm tra nếu response là XML error
+                            if (
+                                responseText.startsWith("<?xml") ||
+                                responseText.startsWith(
+                                    "<ServiceExceptionReport"
+                                )
+                            ) {
+                                const parser = new DOMParser();
+                                const xmlDoc = parser.parseFromString(
+                                    responseText,
+                                    "text/xml"
+                                );
+                                const serviceException =
+                                    xmlDoc.getElementsByTagName(
+                                        "ServiceException"
+                                    )[0];
+
+                                if (serviceException) {
+                                    console.error(
+                                        "WMS Error:",
+                                        serviceException.textContent
+                                    );
+                                    resolve({
+                                        layerId: wmsConfig.id,
+                                        layerName: wmsConfig.name,
+                                        data: [],
+                                        error: serviceException.textContent,
+                                        clickPoint: clickPointWGS84,
+                                    });
+                                    return;
+                                }
+                            }
+
+                            // Parse JSON response
+                            const response = JSON.parse(responseText);
+                            resolve({
+                                layerId: wmsConfig.id,
+                                layerName: wmsConfig.name,
+                                data: response.features || [],
+                                clickPoint: clickPointWGS84,
+                            });
+                        } catch (e) {
+                            console.error(
+                                "Error parsing GetFeatureInfo response:",
+                                e
+                            );
+                            console.log("Raw response:", xhr.responseText);
+                            resolve({
+                                layerId: wmsConfig.id,
+                                layerName: wmsConfig.name,
+                                data: [],
+                                error: "Error parsing response",
+                                clickPoint: clickPointWGS84,
+                            });
+                        }
+                    } else {
+                        console.error(
+                            "GetFeatureInfo request failed:",
+                            xhr.status,
+                            xhr.statusText
+                        );
+                        resolve({
+                            layerId: wmsConfig.id,
+                            layerName: wmsConfig.name,
+                            data: [],
+                            error: `Request failed: ${xhr.status} ${xhr.statusText}`,
+                            clickPoint: clickPointWGS84,
+                        });
+                    }
+                };
+
+                xhr.onerror = () => {
+                    console.error("Error executing GetFeatureInfo request");
+                    resolve({
+                        layerId: wmsConfig.id,
+                        layerName: wmsConfig.name,
+                        data: [],
+                        error: "Network error",
+                        clickPoint: clickPointWGS84,
+                    });
+                };
+
+                xhr.send();
+            });
+        });
+    },
+
+    // Hàm format giá trị cho từng loại thuộc tính
+    formatPropertyValue: function (key, value) {
+        // Định nghĩa các giá trị cho các mã
+        const ldlrMap = {
+            TXDG: "Trồng xen dưới gỗ",
+            // Thêm các mã khác nếu cần
+        };
+
+        const mdsdMap = {
+            VQG: "Vườn quốc gia",
+            // Thêm các mã khác nếu cần
+        };
+
+        const paMap = {
+            BV: "Bảo vệ",
+            // Thêm các mã khác nếu cần
+        };
+
+        const pkcnMap = {
+            BVNN: "Bảo vệ nghiêm ngặt",
+            // Thêm các mã khác nếu cần
+        };
+
+        // Format theo loại thuộc tính
+        switch (key) {
+            case "dtich":
+                return value ? `${value.toFixed(2)} ha` : "";
+            case "ldlr":
+                return `${value} - ${ldlrMap[value] || value}`;
+            case "mdsd":
+                return `${value} - ${mdsdMap[value] || value}`;
+            case "pa":
+                return `${value} - ${paMap[value] || value}`;
+            case "pkcn_ht":
+            case "pkcn_qh":
+                return `${value} - ${pkcnMap[value] || value}`;
+            default:
+                return value || "";
+        }
+    },
+
+    // Hàm lấy nhãn hiển thị cho thuộc tính
+    getPropertyLabel: function (key) {
+        const labelMap = {
+            tinh: "Tỉnh",
+            huyen: "Huyện",
+            xa: "Xã",
+            tk: "Tiểu khu",
+            khoanh: "Khoảnh",
+            lo: "Lô",
+            dtich: "Diện tích",
+            ldlr: "Loại đất lâm nghiệp",
+            mdsd: "Mục đích sử dụng",
+            churung: "Chủ rừng",
+            pa: "Phương án",
+            pkcn_ht: "Phân khu chức năng hiện trạng",
+            pkcn_qh: "Phân khu chức năng quy hoạch",
+        };
+        return labelMap[key] || key;
+    },
+
+    // Hàm lọc và sắp xếp các thuộc tính cần hiển thị
+    getDisplayProperties: function (properties) {
+        // Danh sách các thuộc tính cần hiển thị theo thứ tự
+        const displayOrder = [
+            "tinh",
+            "huyen",
+            "xa",
+            "tk",
+            "khoanh",
+            "lo",
+            "dtich",
+            "ldlr",
+            "mdsd",
+            "churung",
+            "pa",
+            "pkcn_ht",
+            "pkcn_qh",
+        ];
+
+        return displayOrder
+            .filter((key) => properties.hasOwnProperty(key))
+            .map((key) => ({
+                key: key,
+                label: this.getPropertyLabel(key),
+                value: this.formatPropertyValue(key, properties[key]),
+            }));
+    },
+
+    createPopupTemplate: function (result) {
+        return {
+            title: `{churung}`,
+            content: [
+                {
+                    type: "text",
+                    text: `
+                        <div class="coordinates-info">
+                            <strong>Tọa độ (WGS84):</strong><br>
+                            Kinh độ: ${result.clickPoint.longitude.toFixed(
+                                6
+                            )}<br>
+                            Vĩ độ: ${result.clickPoint.latitude.toFixed(6)}
+                        </div>
+                    `,
+                },
+                {
+                    type: "fields",
+                    fieldInfos: [
+                        {
+                            fieldName: "tinh",
+                            label: "Tỉnh",
+                        },
+                        {
+                            fieldName: "huyen",
+                            label: "Huyện",
+                        },
+                        {
+                            fieldName: "xa",
+                            label: "Xã",
+                        },
+                        {
+                            fieldName: "tk",
+                            label: "Tiểu khu",
+                        },
+                        {
+                            fieldName: "khoanh",
+                            label: "Khoảnh",
+                        },
+                        {
+                            fieldName: "lo",
+                            label: "Lô",
+                        },
+                        {
+                            fieldName: "dtich",
+                            label: "Diện tích (ha)",
+                            format: {
+                                digitSeparator: true,
+                                places: 2,
+                            },
+                        },
+                        {
+                            fieldName: "ldlr",
+                            label: "Loại đất lâm nghiệp",
+                        },
+                        {
+                            fieldName: "mdsd",
+                            label: "Mục đích sử dụng",
+                        },
+                        {
+                            fieldName: "churung",
+                            label: "Chủ rừng",
+                        },
+                        {
+                            fieldName: "pa",
+                            label: "Phương án",
+                        },
+                        {
+                            fieldName: "pkcn_ht",
+                            label: "Phân khu chức năng hiện trạng",
+                        },
+                        {
+                            fieldName: "pkcn_qh",
+                            label: "Phân khu chức năng quy hoạch",
+                        },
+                    ],
+                },
+                {
+                    type: "text",
+                    text: `<div class="source-info text-right">
+                        <small class="text-muted">
+                            Thời gian truy vấn: ${new Date().toLocaleString(
+                                "vi-VN"
+                            )}
+                        </small>
+                    </div>`,
+                },
+            ],
+        };
+    },
+
+    // Hàm xử lý click và hiển thị popup
+    handleMapClick: async function (event) {
+        try {
+            const highestPriorityLayer = Array.from(_wmsLayers.entries())
+                .map(([id, layer]) => ({
+                    id,
+                    layer,
+                    config: WMS_LAYERS.find((c) => c.id === id),
+                }))
+                .sort(
+                    (a, b) => a.config.zoomPriority - b.config.zoomPriority
+                )[0];
+
+            if (!highestPriorityLayer) return;
+
+            // Hiển thị loading state
+            _view.popup.open({
+                location: event.mapPoint,
+                content: "Đang tải thông tin...",
+            });
+
+            const result = await this.getFeatureInfo(
+                event,
+                highestPriorityLayer.layer,
+                highestPriorityLayer.config
+            );
+
+            if (!result.data || result.data.length === 0) {
+                _view.popup.content =
+                    "Không tìm thấy thông tin tại vị trí này.";
+                return;
+            }
+
+            // Tạo Graphic cho feature đầu tiên
+            require(["esri/Graphic", "esri/PopupTemplate"], (
+                Graphic,
+                PopupTemplate
+            ) => {
+                const feature = result.data[0];
+
+                // Tạo graphic từ feature
+                const graphic = new Graphic({
+                    geometry: {
+                        type: "point",
+                        longitude: result.clickPoint.longitude,
+                        latitude: result.clickPoint.latitude,
+                        spatialReference: { wkid: 4326 },
+                    },
+                    attributes: {
+                        ...feature.properties,
+                        // Format các giá trị đặc biệt
+                        ldlr: this.formatPropertyValue(
+                            "ldlr",
+                            feature.properties.ldlr
+                        ),
+                        mdsd: this.formatPropertyValue(
+                            "mdsd",
+                            feature.properties.mdsd
+                        ),
+                        pa: this.formatPropertyValue(
+                            "pa",
+                            feature.properties.pa
+                        ),
+                        pkcn_ht: this.formatPropertyValue(
+                            "pkcn_ht",
+                            feature.properties.pkcn_ht
+                        ),
+                        pkcn_qh: this.formatPropertyValue(
+                            "pkcn_qh",
+                            feature.properties.pkcn_qh
+                        ),
+                    },
+                });
+
+                // Tạo và áp dụng template
+                const popupTemplate = new PopupTemplate(
+                    this.createPopupTemplate(result)
+                );
+                graphic.popupTemplate = popupTemplate;
+
+                // Hiển thị popup với graphic
+                _view.popup.open({
+                    location: event.mapPoint,
+                    features: [graphic],
+                });
+            });
+        } catch (error) {
+            console.error("Error in handleMapClick:", error);
+            _view.popup.content = "Có lỗi xảy ra khi truy vấn thông tin.";
+        }
+    },
 };
 
 // Cập nhật hàm toggle WMS layer
-window.toggleWMSLayer = function(wmsId, button) {
-    const wmsConfig = WMS_LAYERS.find(config => config.id === wmsId);
+window.toggleWMSLayer = function (wmsId, button) {
+    const wmsConfig = WMS_LAYERS.find((config) => config.id === wmsId);
     if (!wmsConfig) return;
 
     button.disabled = true;
 
     if (_wmsLayers.has(wmsId)) {
         WMSLayerManager.removeWMSLayer(wmsId);
-        button.classList.remove('active');
+        button.classList.remove("active");
         button.innerHTML = '<i class="bi bi-eye"></i>';
         button.disabled = false;
     } else {
         button.innerHTML = '<i class="bi bi-hourglass-split"></i>';
-        
+
         WMSLayerManager.createAndAddWMSLayer(wmsConfig)
             .then(() => {
-                button.classList.add('active');
+                button.classList.add("active");
                 button.innerHTML = '<i class="bi bi-eye-slash"></i>';
-                
+
                 const visibleLayers = Array.from(_wmsLayers.keys())
-                    .map(id => WMS_LAYERS.find(config => config.id === id))
+                    .map((id) => WMS_LAYERS.find((config) => config.id === id))
                     .sort((a, b) => a.zoomPriority - b.zoomPriority);
-                
+
                 if (visibleLayers[0].id === wmsId) {
-                    zoomToWMSExtent(wmsConfig.url, wmsConfig.layer.split(':')[1]);
+                    zoomToWMSExtent(
+                        wmsConfig.url,
+                        wmsConfig.layer.split(":")[1]
+                    );
                 }
             })
-            .catch(error => {
+            .catch((error) => {
                 console.error("Error toggling WMS layer:", error);
                 button.innerHTML = '<i class="bi bi-eye"></i>';
             })
@@ -148,13 +619,21 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
         "esri/config",
         "esri/Camera",
         "esri/widgets/BasemapGallery",
-        "esri/geometry/Extent"
-    ], function(Map, SceneView, WMSLayer, esriConfig, Camera, BasemapGallery, Extent) {
+        "esri/geometry/Extent",
+    ], function (
+        Map,
+        SceneView,
+        WMSLayer,
+        esriConfig,
+        Camera,
+        BasemapGallery,
+        Extent
+    ) {
         setupCORS(esriConfig);
-        
+
         _map = new Map({
             basemap: "dark-gray-vector",
-            ground: "world-elevation"
+            ground: "world-elevation",
         });
 
         _view = new SceneView({
@@ -164,39 +643,39 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
                 position: {
                     longitude: center[0],
                     latitude: center[1],
-                    z: 40000000
+                    z: 40000000,
                 },
                 tilt: 0,
-                heading: 0
+                heading: 0,
             },
-            qualityProfile: "high"
+            qualityProfile: "high",
         });
 
         _view.when(() => {
             console.log("View loaded at:", new Date().toISOString());
-            
+
             // Tạo button và offcanvas cho basemap
             const basemapControl = createControlButton({
-                id: 'basemap',
-                title: 'Bản đồ nền',
-                icon: 'layers',
-                offcanvasTitle: 'Chọn bản đồ nền',
-                buttonClass: 'btn-primary'
+                id: "basemap",
+                title: "Bản đồ nền",
+                icon: "layers",
+                offcanvasTitle: "Chọn bản đồ nền",
+                buttonClass: "btn-primary",
             });
 
             // Khởi tạo BasemapGallery trong offcanvas content
             const basemapGallery = new BasemapGallery({
                 view: _view,
-                container: basemapControl.contentContainer
+                container: basemapControl.contentContainer,
             });
 
             // Tạo button và offcanvas cho WMS
             const wmsControl = createControlButton({
-                id: 'wms',
-                title: 'Lớp WMS',
-                icon: 'map',
-                offcanvasTitle: 'Lớp bản đồ WMS',
-                buttonClass: 'btn-success'
+                id: "wms",
+                title: "Lớp WMS",
+                icon: "map",
+                offcanvasTitle: "Lớp bản đồ WMS",
+                buttonClass: "btn-success",
             });
 
             // Khởi tạo danh sách WMS trong offcanvas content
@@ -204,10 +683,14 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
             WMSLayerManager.loadDefaultWMSLayers();
         });
 
-        _view.watch("updating", function(val) {
+        _view.watch("updating", function (val) {
             if (!val) {
                 console.log("Map loaded completely");
             }
+        });
+
+        _view.on("click", (event) => {
+            WMSLayerManager.handleMapClick(event);
         });
     });
 }
