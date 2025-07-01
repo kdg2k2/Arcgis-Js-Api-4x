@@ -36,10 +36,46 @@ const WMS_LAYERS = [
 
 // Module-level function để xử lý WMS layers
 const WMSLayerManager = {
-    createAndAddWMSLayer: function (config) {
+    // Hàm xử lý CQL Filter
+    buildCQLFilter: function (baseFilter, additionalFilter) {
+        let filters = [];
+
+        if (baseFilter && baseFilter.trim()) {
+            filters.push(`(${baseFilter})`);
+        }
+
+        if (additionalFilter && additionalFilter.trim()) {
+            filters.push(`(${additionalFilter})`);
+        }
+
+        return filters.length > 0 ? filters.join(" AND ") : null;
+    },
+
+    createAndAddWMSLayer: function (config, options = {}) {
         return new Promise((resolve, reject) => {
             require(["esri/layers/WMSLayer"], function (WMSLayer) {
                 console.log(`Creating WMS layer for: ${config.id}`);
+
+                // Xử lý CQL Filter
+                const cqlFilter = this.buildCQLFilter(
+                    config.cqlFilter,
+                    options.cqlFilter
+                );
+
+                // Custom parameters với CQL Filter
+                const customParameters = {
+                    transparent: true,
+                    format: "image/png",
+                    ...(cqlFilter && { CQL_FILTER: cqlFilter }),
+                };
+
+                console.log(`WMS Parameters for ${config.id}:`, {
+                    url: config.url,
+                    layer: config.layer,
+                    cqlFilter: cqlFilter,
+                    timestamp: new Date().toISOString(),
+                });
+
                 const wmsLayer = new WMSLayer({
                     url: config.url,
                     sublayers: [
@@ -48,10 +84,7 @@ const WMSLayerManager = {
                         },
                     ],
                     version: config.version,
-                    customParameters: {
-                        transparent: true,
-                        format: "image/png",
-                    },
+                    customParameters: customParameters,
                     opacity: 0.8,
                 });
 
@@ -59,10 +92,15 @@ const WMSLayerManager = {
                     .load()
                     .then(() => {
                         console.log(
-                            `WMS layer ${config.id} loaded successfully`
+                            `WMS layer ${
+                                config.id
+                            } loaded successfully at ${new Date().toISOString()}`
                         );
                         _map.add(wmsLayer);
                         _wmsLayers.set(config.id, wmsLayer);
+
+                        // Lưu CQL Filter hiện tại vào layer để tham chiếu sau này
+                        wmsLayer.cqlFilter = cqlFilter;
 
                         // Cập nhật UI
                         const button = document.querySelector(
@@ -82,7 +120,7 @@ const WMSLayerManager = {
                         );
                         reject(error);
                     });
-            });
+            }.bind(this)); // Bind this để sử dụng được buildCQLFilter
         });
     },
 
@@ -128,7 +166,7 @@ const WMSLayerManager = {
     },
 
     // Hàm truy vấn thông tin WMS
-    getFeatureInfo: function (event, wmsLayer, wmsConfig) {
+    getFeatureInfo: function (event, wmsLayer, wmsConfig, additionalCqlFilter) {
         console.log("Starting getFeatureInfo");
 
         return new Promise((resolve, reject) => {
@@ -184,6 +222,12 @@ const WMSLayerManager = {
                 const pixelX = Math.round(screenPoint.x);
                 const pixelY = Math.round(screenPoint.y);
 
+                // Xử lý CQL Filter
+                const cqlFilter = this.buildCQLFilter(
+                    wmsLayer.cqlFilter, // Sử dụng filter đã lưu trong layer
+                    additionalCqlFilter
+                );
+
                 // Tạo URL GetFeatureInfo
                 const url = new URL(wmsConfig.url);
                 const params = new URLSearchParams({
@@ -202,6 +246,7 @@ const WMSLayerManager = {
                     X: pixelX,
                     Y: pixelY,
                     TRANSPARENT: "true",
+                    ...(cqlFilter && { CQL_FILTER: cqlFilter })
                 });
 
                 const getFeatureInfoUrl = `${url.origin}${
