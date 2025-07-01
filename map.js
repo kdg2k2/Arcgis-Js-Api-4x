@@ -687,25 +687,38 @@ function createControlButton({
     container.appendChild(button);
 
     // Tạo offcanvas
+    let offcanvas = null;
+    if (offcanvasTitle || offcanvasContent)
+        offcanvas = createOffCanvasForControlButton(
+            id,
+            offcanvasTitle,
+            offcanvasContent
+        );
+
+    return {
+        button,
+        offcanvas,
+        contentContainer: offcanvas
+            ? offcanvas.querySelector(`#${id}Content`)
+            : null,
+    };
+}
+
+function createOffCanvasForControlButton(id = "", title = "", content = "") {
     const offcanvas = document.createElement("div");
     offcanvas.className = "offcanvas offcanvas-end";
     offcanvas.id = `${id}Offcanvas`;
     offcanvas.innerHTML = `
         <div class="offcanvas-header">
-            <h5 class="offcanvas-title">${offcanvasTitle}</h5>
+            <h5 class="offcanvas-title">${title}</h5>
             <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
         </div>
         <div class="offcanvas-body" id="${id}Content">
-            ${offcanvasContent || ""}
+            ${content || ""}
         </div>
     `;
     document.body.appendChild(offcanvas);
-
-    return {
-        button,
-        offcanvas,
-        contentContainer: offcanvas.querySelector(`#${id}Content`),
-    };
+    return offcanvas;
 }
 
 function setupCORS(esriConfig) {
