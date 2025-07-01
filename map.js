@@ -12,13 +12,22 @@ const WMS_LAYERS = [
         layer: "ws_ranhgioi:rg_vn_tinh",
         version: "1.1.1",
         defaultVisible: true,
-        zoomPriority: 2,
+        zoomPriority: 10,
     },
     {
         id: "wms_2",
         name: "Bản đồ hiện trạng rừng Cúc Phương",
         url: "https://maps-150.ifee.edu.vn:8453/geoserver/ws_6VQG/wms",
         layer: "ws_6VQG:htr_cucphuong",
+        version: "1.1.1",
+        defaultVisible: false,
+        zoomPriority: 9,
+    },
+    {
+        id: "wms_3",
+        name: "Bản đồ hiện trạng rừng Nghệ An",
+        url: "https://maps-151.ifee.edu.vn:8453/geoserver/NgheAnPfes/wms",
+        layer: "NgheAnPfes:htr",
         version: "1.1.1",
         defaultVisible: true,
         zoomPriority: 1,
@@ -616,7 +625,6 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
                 title: "Bản đồ nền",
                 icon: "layers",
                 offcanvasTitle: "Chọn bản đồ nền",
-                buttonClass: "btn-primary",
             });
 
             // Khởi tạo BasemapGallery trong offcanvas content
@@ -631,7 +639,6 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
                 title: "Lớp WMS",
                 icon: "map",
                 offcanvasTitle: "Lớp bản đồ WMS",
-                buttonClass: "btn-success",
             });
 
             // Khởi tạo danh sách WMS trong offcanvas content
@@ -651,30 +658,6 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
     });
 }
 
-// Hàm tạo container cho các button điều khiển
-function createMapControlsContainer() {
-    if (_mapControlsContainer) return _mapControlsContainer;
-
-    _mapControlsContainer = document.createElement("div");
-    _mapControlsContainer.className = "map-controls-container";
-    _mapControlsContainer.style.cssText = `
-        position: absolute;
-        top: 20px;
-        right: 20px;
-        z-index: 99;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        background: rgba(255, 255, 255, 0.9);
-        padding: 10px;
-        border-radius: 8px;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
-    `;
-
-    document.querySelector("#mapDiv").appendChild(_mapControlsContainer);
-    return _mapControlsContainer;
-}
-
 // Hàm tạo button và offcanvas
 function createControlButton({
     id,
@@ -682,18 +665,25 @@ function createControlButton({
     icon,
     offcanvasTitle,
     offcanvasContent,
-    buttonClass = "btn-primary",
+    buttonClass = "",
 }) {
     // Tạo container nếu chưa có
-    const container = createMapControlsContainer();
+    const container = document.querySelector(
+        ".esri-component.esri-navigation-toggle.esri-widget"
+    );
 
     // Tạo button
     const button = document.createElement("button");
-    button.className = `btn ${buttonClass}`;
+    button.className = `border-0 esri-widget--button esri-widget esri-interactive .esri-navigation-toggle__button--rotate ${buttonClass}`;
+    button.setAttribute(
+        "style",
+        "border-top: solid 1px rgba(110, 110, 110, .3) !important;"
+    );
     button.setAttribute("type", "button");
+    button.setAttribute("title", title);
     button.setAttribute("data-bs-toggle", "offcanvas");
     button.setAttribute("data-bs-target", `#${id}Offcanvas`);
-    button.innerHTML = `<i class="bi bi-${icon}"></i> ${title}`;
+    button.innerHTML = `<span class="bi bi-${icon}"></span>`;
     container.appendChild(button);
 
     // Tạo offcanvas
@@ -794,29 +784,34 @@ function zoomToWMSExtent(wmsUrl, layerName) {
 
                                 console.log("Created extent:", extent);
 
-                                _view
-                                    .goTo(
-                                        {
-                                            target: extent.expand(1.2),
-                                            tilt: 45,
-                                            heading: 0,
-                                            position: {
-                                                z: 800000,
+                                setTimeout(() => {
+                                    _view
+                                        .goTo(
+                                            {
+                                                target: extent.expand(1.2),
+                                                tilt: 0,
+                                                heading: 0,
+                                                position: {
+                                                    z: 800000,
+                                                },
                                             },
-                                        },
-                                        {
-                                            duration: 3000,
-                                            easing: "out-quad",
-                                        }
-                                    )
-                                    .then(() => {
-                                        console.log(
-                                            "Zoom completed successfully"
-                                        );
-                                    })
-                                    .catch((error) => {
-                                        console.error("Zoom failed:", error);
-                                    });
+                                            {
+                                                duration: 5000,
+                                                easing: "out-quad",
+                                            }
+                                        )
+                                        .then(() => {
+                                            console.log(
+                                                "Zoom completed successfully"
+                                            );
+                                        })
+                                        .catch((error) => {
+                                            console.error(
+                                                "Zoom failed:",
+                                                error
+                                            );
+                                        });
+                                }, 2000);
                             });
                             return;
                         } else {
