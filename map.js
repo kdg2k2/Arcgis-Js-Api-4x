@@ -782,6 +782,8 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
         "esri/Camera",
         "esri/widgets/BasemapGallery",
         "esri/geometry/Extent",
+        "esri/layers/GraphicsLayer",
+        "esri/widgets/Sketch",
     ], function (
         Map,
         SceneView,
@@ -789,13 +791,26 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
         esriConfig,
         Camera,
         BasemapGallery,
-        Extent
+        Extent,
+        GraphicsLayer,
+        Sketch
     ) {
         setupCORS(esriConfig);
+
+        // Tạo graphics layer cho sketch
+        var sketch;
+        const sketchLayer = new GraphicsLayer({
+            id: "sketchLayer",
+            title: "Sketch Layer",
+            elevationInfo: {
+                mode: "on-the-ground",
+            },
+        });
 
         _map = new Map({
             basemap: "dark-gray-vector",
             ground: "world-elevation",
+            layers: [sketchLayer],
         });
 
         _view = new SceneView({
@@ -815,6 +830,48 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
 
         _view.when(() => {
             console.log("View loaded at:", new Date().toISOString());
+
+            // Tạo sketch widget
+            sketch = new Sketch({
+                view: _view,
+                layer: sketchLayer,
+                creationMode: "update",
+                availableCreateTools: ["polygon"],
+                visibleElements: {
+                    createTools: {
+                        point: false,
+                        polyline: false,
+                    },
+                    selectionTools: {
+                        "lasso-selection": false,
+                        "rectangle-selection": false,
+                    },
+                    settingsMenu: false,
+                    undoRedoMenu: true,
+                },
+                defaultCreateOptions: {
+                    mode: "click",
+                },
+                snappingOptions: {
+                    enabled: true,
+                    selfEnabled: true,
+                    featureEnabled: true,
+                },
+                labelOptions: {
+                    enabled: true,
+                    labelExpressionInfo: {
+                        expression:
+                            "Text($feature.SHAPE_Area, '#,##0.00') + ' m²'",
+                    },
+                },
+                tooltipOptions: {
+                    enabled: true,
+                },
+            });
+
+            // Thêm sketch widget vào view (mặc định ẩn)
+            sketch.visible = false;
+            _view.ui.add(sketch, "top-right");
 
             // Tạo button và offcanvas cho basemap
             const basemapControl = createControlButton({
@@ -836,6 +893,39 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
                 title: "Lớp WMS",
                 icon: "map",
                 offcanvasTitle: "Lớp bản đồ WMS",
+            });
+
+            // Thêm sketch control với tham chiếu đến sketch widget
+            const sketchControl = createControlButton({
+                id: "sketch",
+                title: "Công cụ vẽ",
+                icon: "pencil",
+                buttonClass: "sketch-tool-btn",
+                onClick: (button) => {
+                    if (sketch.visible) {
+                        sketch.visible = false;
+                        button.classList.remove("active");
+                        button.innerHTML = '<span class="bi bi-pencil"></span>';
+                    } else {
+                        sketch.visible = true;
+                        button.classList.add("active");
+                        button.innerHTML =
+                            '<span class="bi bi-pencil-fill"></span>';
+                    }
+                },
+            });
+
+            // Handle sketch events
+            sketch.on(["create", "update"], (event) => {
+                if (event.state === "complete") {
+                    const graphic = event.graphic;
+                    if (graphic) {
+                        // Đặt graphic nằm trên mặt đất
+                        graphic.elevationInfo = {
+                            mode: "on-the-ground",
+                        };
+                    }
+                }
             });
 
             // Khởi tạo danh sách WMS trong offcanvas content
@@ -861,36 +951,61 @@ function createControlButton({
     title,
     icon,
     offcanvasTitle,
-    offcanvasContent,
+    offcanvasContent = "",
     buttonClass = "",
+    onClick,
 }) {
-    // Tạo container nếu chưa có
     const container = document.querySelector(
         ".esri-component.esri-navigation-toggle.esri-widget"
     );
 
-    // Tạo button
     const button = document.createElement("button");
-    button.className = `border-0 esri-widget--button esri-widget esri-interactive .esri-navigation-toggle__button--rotate ${buttonClass}`;
+
+    // Base classes cho tất cả buttons
+    const baseClasses = [
+        "border-0",
+        "esri-widget--button",
+        "esri-widget",
+        "esri-interactive",
+    ];
+    if (buttonClass) {
+        baseClasses.push(buttonClass);
+    }
+    button.className = baseClasses.join(" ");
+
+    // Style chung
     button.setAttribute(
         "style",
         "border-top: solid 1px rgba(110, 110, 110, .3) !important;"
     );
     button.setAttribute("type", "button");
     button.setAttribute("title", title);
-    button.setAttribute("data-bs-toggle", "offcanvas");
-    button.setAttribute("data-bs-target", `#${id}Offcanvas`);
+
+    // QUAN TRỌNG: Chỉ thêm data attributes cho offcanvas buttons
+    if (!onClick) {
+        button.setAttribute("data-bs-toggle", "offcanvas");
+        button.setAttribute("data-bs-target", `#${id}Offcanvas`);
+    }
+
+    // Icon và content
     button.innerHTML = `<span class="bi bi-${icon}"></span>`;
+
+    // Thêm onclick event nếu có
+    if (onClick) {
+        button.onclick = () => onClick(button);
+    }
+
     container.appendChild(button);
 
-    // Tạo offcanvas
+    // Chỉ tạo offcanvas cho buttons không có onClick
     let offcanvas = null;
-    if (offcanvasTitle || offcanvasContent)
+    if (!onClick && (offcanvasTitle || offcanvasContent)) {
         offcanvas = createOffCanvasForControlButton(
             id,
             offcanvasTitle,
             offcanvasContent
         );
+    }
 
     return {
         button,
