@@ -27,20 +27,69 @@
         <script src="https://js.arcgis.com/4.33/"></script>
 
         <style>
-            #mapDiv {
+            .map-view {
                 padding: 0;
                 margin: 0;
-                height: 100vh;
+                /* height: 100vh; */
+                height: 50vh;
                 width: 100%;
             }
         </style>
     </head>
     <body>
-        <div id="mapDiv"></div>
+        <!-- <div class="map-view" id="mapDiv"></div> -->
+        <div class="row w-100 h-100">
+            <div class="col-12">
+                <div class="map-view" id="mapDiv1"></div>
+            </div>
+            <div class="col-12">
+                <div class="map-view" id="mapDiv2"></div>
+            </div>
+        </div>
 
-        <script src="map.js"></script>
+        <script src="map-optimize.js"></script>
+        <!-- <script src="map.js"></script> -->
         <script>
-            initMap3D("mapDiv");
+            (async function () {
+                await initMap3D("mapDiv1");
+
+                await initMap3D("mapDiv2", {
+                    // Map settings
+                    basemap: "satellite", // Đổi basemap
+                    center: [106.7, 10.8], // Tọa độ TP.HCM
+
+                    // WMS settings
+                    enableWMS: true,
+                    loadDefaultWMS: true, // Không load mặc định
+                    wmsLayers: [
+                        // WMS custom
+                        {
+                            id: "wms_2",
+                            name: "Bản đồ hiện trạng rừng Cúc Phương",
+                            url: "https://maps-150.ifee.edu.vn:8453/geoserver/ws_6VQG/wms",
+                            layer: "ws_6VQG:htr_cucphuong",
+                            version: "1.1.1",
+                            defaultVisible: true,
+                            zoomPriority: 9,
+                        },
+                    ],
+
+                    // Sketch settings
+                    sketchOptions: {
+                        enableSave: true,
+                        enableMerge: true,
+                        enableSplit: true,
+                        // apiEndpoint: "/api/custom-save", // API endpoint riêng
+                    },
+
+                    // Control settings
+                    controlOptions: {
+                        enableBasemap: true,
+                        enableWMS: true,
+                        enableSketch: true,
+                    },
+                });
+            })();
         </script>
     </body>
 </html>
