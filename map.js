@@ -898,8 +898,8 @@ const SketchManager = {
         color: [227, 139, 79, 0.8],
         outline: {
             color: [255, 255, 255],
-            width: 1
-        }
+            width: 1,
+        },
     },
 
     mergeSymbol: {
@@ -907,26 +907,32 @@ const SketchManager = {
         color: [227, 139, 255],
         outline: {
             color: [255, 255, 255],
-            width: 1
-        }
+            width: 1,
+        },
     },
 
-    initialize: function(view) {
+    initialize: function (view) {
         require([
             "esri/layers/GraphicsLayer",
             "esri/widgets/Sketch",
             "esri/geometry/geometryEngine",
             "esri/Graphic",
-            "esri/geometry/support/webMercatorUtils"
-        ], function(GraphicsLayer, Sketch, geometryEngine, Graphic, webMercatorUtils) {
+            "esri/geometry/support/webMercatorUtils",
+        ], function (
+            GraphicsLayer,
+            Sketch,
+            geometryEngine,
+            Graphic,
+            webMercatorUtils
+        ) {
             // Tạo graphics layer
             this.sketchLayer = new GraphicsLayer({
                 id: "sketchLayer",
                 title: "Sketch Layer",
                 elevationInfo: {
-                    mode: "on-the-ground"
+                    mode: "on-the-ground",
                 },
-                visible: false
+                visible: false,
             });
 
             view.map.add(this.sketchLayer);
@@ -940,37 +946,45 @@ const SketchManager = {
                 defaultCreateOptions: {
                     mode: "click",
                     elevationOptions: {
-                        enabled: false
-                    }
+                        enabled: false,
+                    },
                 },
                 defaultUpdateOptions: {
                     tool: "reshape",
                     multipleSelectionEnabled: true,
                     enableZ: false,
                     enableVerticalEditing: false,
-                    toggleToolOnClick: false
+                    toggleToolOnClick: false,
+                },
+                snappingOptions: {
+                    enabled: true,
+                    featureSources: [
+                        { layer: this.sketchLayer, enabled: true },
+                    ],
                 },
                 visibleElements: {
                     createTools: {
                         point: false,
                         polyline: false,
-                        polygon: true
+                        polygon: true,
                     },
                     selectionTools: {
                         "lasso-selection": true,
-                        "rectangle-selection": true
+                        "rectangle-selection": true,
                     },
-                    settingsMenu: false,
+                    settingsMenu: true,
+                    duplicateButton: false,
                     undoRedoMenu: true,
                     elevationInfo: false,
-                    z: false
+                    z: false,
                 },
-                visible: false
+                visible: false,
             });
 
-             // Tạo merge button
+            // Tạo merge button
             this.mergeButton = document.createElement("button");
-            this.mergeButton.className = "esri-widget esri-widget--button esri-interactive merge-button";
+            this.mergeButton.className =
+                "esri-widget esri-widget--button esri-interactive merge-button";
             this.mergeButton.title = "Merge selected polygons";
             this.mergeButton.innerHTML = `
                 <span class="esri-icon-combine" aria-hidden="true"></span>
@@ -985,7 +999,7 @@ const SketchManager = {
 
                 try {
                     const updatedGeometry = [];
-                    selectedGraphics.forEach(graphic => {
+                    selectedGraphics.forEach((graphic) => {
                         if (!graphic || !graphic.geometry) return;
 
                         if (graphic.geometry.spatialReference.wkid === 4326) {
@@ -1004,7 +1018,7 @@ const SketchManager = {
                     const joinedPolygon = geometryEngine.union(updatedGeometry);
                     if (!joinedPolygon) return;
 
-                    selectedGraphics.forEach(graphic => {
+                    selectedGraphics.forEach((graphic) => {
                         if (graphic) this.sketchLayer.remove(graphic);
                     });
 
@@ -1012,12 +1026,12 @@ const SketchManager = {
                         geometry: joinedPolygon,
                         symbol: this.mergeSymbol,
                         elevationInfo: {
-                            mode: "on-the-ground"
+                            mode: "on-the-ground",
                         },
                         attributes: {
-                            creator: 'clonemail2k2',
-                            createdAt: new Date().toISOString()
-                        }
+                            creator: "clonemail2k2",
+                            createdAt: new Date().toISOString(),
+                        },
                     });
 
                     this.sketchLayer.add(resultGraphic);
@@ -1034,12 +1048,40 @@ const SketchManager = {
             view.ui.add(this.mergeButton, "top-right");
 
             // Hàm cập nhật visibility của merge button
-           const updateMergeButtonVisibility = (event) => {
+            const updateMergeButtonVisibility = (event) => {
                 console.log("Update event:", event);
-                const graphics = event && event.graphics ? event.graphics : this.sketch.updateGraphics;
+                const graphics =
+                    event && event.graphics
+                        ? event.graphics
+                        : this.sketch.updateGraphics;
                 const count = graphics ? graphics.length : 0;
                 this.mergeButton.style.display = count > 1 ? "block" : "none";
             };
+
+            // Bật sẵn tooltip và labels khi khởi tạo
+            this.sketch.when(() => {
+                // Bật tooltip (chú giải công cụ)
+                if (
+                    this.sketch.viewModel &&
+                    this.sketch.viewModel.tooltipOptions
+                ) {
+                    this.sketch.viewModel.tooltipOptions.enabled = true;
+                }
+
+                // Bật labels (nhãn phân vùng)
+                if (
+                    this.sketch.viewModel &&
+                    this.sketch.viewModel.labelOptions
+                ) {
+                    this.sketch.viewModel.labelOptions.enabled = true;
+                }
+
+                // Hoặc sử dụng cách khác nếu API khác
+                if (this.sketch.viewModel) {
+                    this.sketch.viewModel.set("tooltipsEnabled", true);
+                    this.sketch.viewModel.set("labelsEnabled", true);
+                }
+            });
 
             // Handle sketch events
             this.sketch.on("create", (event) => {
@@ -1048,7 +1090,7 @@ const SketchManager = {
                     if (graphic) {
                         graphic.symbol = this.fillSymbol;
                         graphic.elevationInfo = {
-                            mode: "on-the-ground"
+                            mode: "on-the-ground",
                         };
                     }
                 }
@@ -1057,23 +1099,22 @@ const SketchManager = {
             // Theo dõi update event để cập nhật button merge
             this.sketch.on("update", (event) => {
                 updateMergeButtonVisibility(event);
-                
+
                 if (event.state === "complete") {
                     this.mergeButton.style.display = "none";
                 }
             });
-
         }.bind(this));
     },
 
-    toggle: function() {
+    toggle: function () {
         if (!this.sketch) return false;
 
         this.sketch.visible = !this.sketch.visible;
         if (this.sketchLayer) {
             this.sketchLayer.visible = this.sketch.visible;
         }
-        
+
         if (!this.sketch.visible) {
             if (this.mergeButton) {
                 this.mergeButton.style.display = "none";
@@ -1083,9 +1124,9 @@ const SketchManager = {
         return this.sketch.visible;
     },
 
-    isVisible: function() {
+    isVisible: function () {
         return this.sketch ? this.sketch.visible : false;
-    }
+    },
 };
 
 const ControlManager = {
