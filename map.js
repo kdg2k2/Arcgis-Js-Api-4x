@@ -1,7 +1,6 @@
 // Khởi tạo các biến module-level
 let _view, _map;
-let _wmsLayers = new Map(); // key: wmsId, value: WMSLayer
-let _mapControlsContainer; // Container cho các button điều khiển
+let _wmsLayers = new Map();
 
 // Cấu hình WMS Layers với thuộc tính defaultVisible để xác định các layer hiển thị mặc định
 const WMS_LAYERS = [
