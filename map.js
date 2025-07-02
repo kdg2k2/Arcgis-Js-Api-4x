@@ -911,6 +911,271 @@ const SketchManager = {
         },
     },
 
+    // Tạo graphics layer
+    createSketchLayer: function (view, GraphicsLayer) {
+        this.sketchLayer = new GraphicsLayer({
+            id: "sketchLayer",
+            title: "Sketch Layer",
+            elevationInfo: {
+                mode: "on-the-ground",
+            },
+            visible: false,
+        });
+        view.map.add(this.sketchLayer);
+    },
+
+    // Tạo sketch widget
+    createSketchWidget: function (view, Sketch) {
+        this.sketch = new Sketch({
+            view: view,
+            layer: this.sketchLayer,
+            creationMode: "update",
+            availableCreateTools: ["polygon"],
+            defaultCreateOptions: {
+                mode: "click",
+                elevationOptions: {
+                    enabled: false,
+                },
+            },
+            defaultUpdateOptions: {
+                tool: "reshape",
+                multipleSelectionEnabled: true,
+                enableZ: false,
+                enableVerticalEditing: false,
+                toggleToolOnClick: false,
+            },
+            snappingOptions: {
+                enabled: true,
+                featureSources: [{ layer: this.sketchLayer, enabled: true }],
+            },
+            visibleElements: {
+                createTools: {
+                    point: false,
+                    polyline: false,
+                    polygon: true,
+                },
+                selectionTools: {
+                    "lasso-selection": true,
+                    "rectangle-selection": true,
+                },
+                settingsMenu: true,
+                duplicateButton: false,
+                undoRedoMenu: true,
+                elevationInfo: false,
+                z: false,
+            },
+            visible: false,
+        });
+        view.ui.add(this.sketch, "top-right");
+    },
+
+    // Cập nhật visibility/state của merge button
+    updateMergeButtonState: function (event) {
+        console.log("Update event:", event);
+        const graphics =
+            event && event.graphics
+                ? event.graphics
+                : this.sketch.updateGraphics;
+        const count = graphics ? graphics.length : 0;
+
+        if (this.mergeButton) {
+            if (count > 1) {
+                this.mergeButton.removeAttribute("disabled");
+                this.mergeButton.setAttribute("title", "Gộp vùng đã chọn");
+            } else {
+                this.mergeButton.setAttribute("disabled", "true");
+                this.mergeButton.setAttribute(
+                    "title",
+                    "Chọn ít nhất 2 vùng để gộp"
+                );
+            }
+        }
+    },
+
+    // Xử lý logic merge polygons
+    handleMerge: function (webMercatorUtils, geometryEngine, Graphic) {
+        const selectedGraphics = this.sketch.updateGraphics;
+        if (!selectedGraphics || selectedGraphics.length < 2) return;
+
+        try {
+            const updatedGeometry = [];
+            selectedGraphics.forEach((graphic) => {
+                if (!graphic || !graphic.geometry) return;
+
+                if (graphic.geometry.spatialReference.wkid === 4326) {
+                    updatedGeometry.push(
+                        webMercatorUtils.geographicToWebMercator(
+                            graphic.geometry.clone()
+                        )
+                    );
+                } else {
+                    updatedGeometry.push(graphic.geometry.clone());
+                }
+            });
+
+            if (updatedGeometry.length < 2) return;
+
+            const joinedPolygon = geometryEngine.union(updatedGeometry);
+            if (!joinedPolygon) return;
+
+            selectedGraphics.forEach((graphic) => {
+                if (graphic) this.sketchLayer.remove(graphic);
+            });
+
+            const resultGraphic = new Graphic({
+                geometry: joinedPolygon,
+                symbol: this.mergeSymbol,
+                elevationInfo: {
+                    mode: "on-the-ground",
+                },
+                attributes: {
+                    creator: "clonemail2k2",
+                    createdAt: new Date().toISOString(),
+                },
+            });
+
+            this.sketchLayer.add(resultGraphic);
+            if (this.sketch.updateGraphics) {
+                this.sketch.updateGraphics.removeAll();
+            }
+        } catch (error) {
+            console.error("Error during merge:", error);
+        }
+    },
+
+    // Tạo merge button
+    createMergeButton: function (webMercatorUtils, geometryEngine, Graphic) {
+        const sketchContainer = this.sketch.container;
+        const actionBar = sketchContainer.querySelector(
+            "calcite-action-bar[calcite-hydrated]"
+        );
+
+        if (actionBar) {
+            const polygonAction = actionBar.querySelector(
+                'calcite-action[data-action-key="polygon-button"]'
+            );
+            const polygonGroup = polygonAction
+                ? polygonAction.closest("calcite-action-group")
+                : null;
+
+            if (polygonGroup) {
+                // Tạo merge group
+                const mergeGroup = document.createElement(
+                    "calcite-action-group"
+                );
+                mergeGroup.setAttribute("layout", "horizontal");
+                mergeGroup.setAttribute("scale", "m");
+
+                const mergeAction = document.createElement("calcite-action");
+                mergeAction.setAttribute("title", "Chọn ít nhất 2 vùng để gộp");
+                mergeAction.setAttribute("scale", "m");
+                mergeAction.setAttribute("appearance", "solid");
+                mergeAction.style.display = "block";
+                mergeAction.setAttribute("disabled", "true");
+                mergeAction.innerHTML = "<i class='bi bi-subtract'></i>";
+
+                // Thêm event listener cho merge
+                mergeAction.addEventListener("click", () => {
+                    this.handleMerge(webMercatorUtils, geometryEngine, Graphic);
+                });
+
+                mergeGroup.appendChild(mergeAction);
+                polygonGroup.parentNode.insertBefore(
+                    mergeGroup,
+                    polygonGroup.nextSibling
+                );
+
+                this.mergeButton = mergeAction;
+                console.log("Merge button added successfully");
+                return true;
+            }
+        }
+        return false;
+    },
+
+    // Bật tooltip và labels
+    enableTooltipsAndLabels: function () {
+        if (this.sketch.viewModel && this.sketch.viewModel.tooltipOptions) {
+            this.sketch.viewModel.tooltipOptions.enabled = true;
+        }
+
+        if (this.sketch.viewModel && this.sketch.viewModel.labelOptions) {
+            this.sketch.viewModel.labelOptions.enabled = true;
+        }
+
+        if (this.sketch.viewModel) {
+            this.sketch.viewModel.set("tooltipsEnabled", true);
+            this.sketch.viewModel.set("labelsEnabled", true);
+        }
+    },
+
+    // Setup merge button với observer
+    setupMergeButton: function (webMercatorUtils, geometryEngine, Graphic) {
+        // Thử tạo merge button ngay lập tức
+        setTimeout(() => {
+            if (
+                this.createMergeButton(
+                    webMercatorUtils,
+                    geometryEngine,
+                    Graphic
+                )
+            ) {
+                return; // Đã tạo thành công
+            }
+
+            // Nếu chưa tạo được, dùng MutationObserver
+            const sketchContainer = this.sketch.container;
+            const observer = new MutationObserver((mutations) => {
+                if (
+                    this.createMergeButton(
+                        webMercatorUtils,
+                        geometryEngine,
+                        Graphic
+                    )
+                ) {
+                    observer.disconnect();
+                }
+            });
+
+            observer.observe(sketchContainer, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ["calcite-hydrated"],
+            });
+        }, 1000);
+    },
+
+    // Setup sketch events
+    setupSketchEvents: function () {
+        // Handle create events
+        this.sketch.on("create", (event) => {
+            if (event.state === "complete") {
+                const graphic = event.graphic;
+                if (graphic) {
+                    graphic.symbol = this.fillSymbol;
+                    graphic.elevationInfo = {
+                        mode: "on-the-ground",
+                    };
+                }
+            }
+        });
+
+        // Handle update events
+        this.sketch.on("update", (event) => {
+            this.updateMergeButtonState(event);
+
+            if (event.state === "complete" && this.mergeButton) {
+                this.mergeButton.setAttribute("disabled", "true");
+                this.mergeButton.setAttribute(
+                    "title",
+                    "Chọn ít nhất 2 vùng để gộp"
+                );
+            }
+        });
+    },
+
+    // Hàm chính initialize
     initialize: function (view) {
         require([
             "esri/layers/GraphicsLayer",
@@ -925,275 +1190,24 @@ const SketchManager = {
             Graphic,
             webMercatorUtils
         ) {
-            // Tạo graphics layer
-            this.sketchLayer = new GraphicsLayer({
-                id: "sketchLayer",
-                title: "Sketch Layer",
-                elevationInfo: {
-                    mode: "on-the-ground",
-                },
-                visible: false,
-            });
+            // Tạo các components chính - TRUYỀN THAM SỐ
+            this.createSketchLayer(view, GraphicsLayer);
+            this.createSketchWidget(view, Sketch);
 
-            view.map.add(this.sketchLayer);
+            // Setup events
+            this.setupSketchEvents();
 
-            // Tạo sketch widget
-            this.sketch = new Sketch({
-                view: view,
-                layer: this.sketchLayer,
-                creationMode: "update",
-                availableCreateTools: ["polygon"],
-                defaultCreateOptions: {
-                    mode: "click",
-                    elevationOptions: {
-                        enabled: false,
-                    },
-                },
-                defaultUpdateOptions: {
-                    tool: "reshape",
-                    multipleSelectionEnabled: true,
-                    enableZ: false,
-                    enableVerticalEditing: false,
-                    toggleToolOnClick: false,
-                },
-                snappingOptions: {
-                    enabled: true,
-                    featureSources: [
-                        { layer: this.sketchLayer, enabled: true },
-                    ],
-                },
-                visibleElements: {
-                    createTools: {
-                        point: false,
-                        polyline: false,
-                        polygon: true,
-                    },
-                    selectionTools: {
-                        "lasso-selection": true,
-                        "rectangle-selection": true,
-                    },
-                    settingsMenu: true,
-                    duplicateButton: false,
-                    undoRedoMenu: true,
-                    elevationInfo: false,
-                    z: false,
-                },
-                visible: false,
-            });
-
-            // Thêm widgets
-            view.ui.add(this.sketch, "top-right");
-
-            // Hàm cập nhật visibility của merge button - SỬA: Enable/Disable thay vì hide/show
-            const updateMergeButtonVisibility = (event) => {
-                console.log("Update event:", event);
-                const graphics =
-                    event && event.graphics
-                        ? event.graphics
-                        : this.sketch.updateGraphics;
-                const count = graphics ? graphics.length : 0;
-
-                // QUAN TRỌNG: Enable/disable button thay vì hide/show
-                if (this.mergeButton) {
-                    if (count > 1) {
-                        this.mergeButton.removeAttribute("disabled");
-                        this.mergeButton.setAttribute(
-                            "title",
-                            "Gộp vùng đã chọn"
-                        );
-                    } else {
-                        this.mergeButton.setAttribute("disabled", "true");
-                        this.mergeButton.setAttribute(
-                            "title",
-                            "Chọn ít nhất 2 vùng để gộp"
-                        );
-                    }
-                }
-            };
-
-            // Hàm tạo merge button
-            const createMergeButton = () => {
-                const sketchContainer = this.sketch.container;
-                const actionBar = sketchContainer.querySelector(
-                    "calcite-action-bar[calcite-hydrated]"
-                );
-
-                if (actionBar) {
-                    // Tìm group chứa polygon button để chèn sau nó
-                    const polygonAction = actionBar.querySelector(
-                        'calcite-action[data-action-key="polygon-button"]'
-                    );
-                    const polygonGroup = polygonAction
-                        ? polygonAction.closest("calcite-action-group")
-                        : null;
-
-                    if (polygonGroup) {
-                        // Tạo merge group
-                        const mergeGroup = document.createElement(
-                            "calcite-action-group"
-                        );
-                        mergeGroup.setAttribute("layout", "horizontal");
-                        mergeGroup.setAttribute("scale", "m");
-
-                        const mergeAction =
-                            document.createElement("calcite-action");
-                        mergeAction.setAttribute(
-                            "title",
-                            "Gộp polygon đã chọn"
-                        );
-                        mergeAction.setAttribute("scale", "m");
-                        mergeAction.setAttribute("appearance", "solid");
-                        // SỬA: Luôn hiển thị nhưng disable
-                        mergeAction.style.display = "block";
-                        mergeAction.setAttribute("disabled", "true");
-                        mergeAction.innerHTML =
-                            "<i class='bi bi-subtract'></i>";
-
-                        // Thêm event listener cho merge
-                        mergeAction.addEventListener("click", () => {
-                            const selectedGraphics = this.sketch.updateGraphics;
-                            if (
-                                !selectedGraphics ||
-                                selectedGraphics.length < 2
-                            )
-                                return;
-
-                            try {
-                                const updatedGeometry = [];
-                                selectedGraphics.forEach((graphic) => {
-                                    if (!graphic || !graphic.geometry) return;
-
-                                    if (
-                                        graphic.geometry.spatialReference
-                                            .wkid === 4326
-                                    ) {
-                                        updatedGeometry.push(
-                                            webMercatorUtils.geographicToWebMercator(
-                                                graphic.geometry.clone()
-                                            )
-                                        );
-                                    } else {
-                                        updatedGeometry.push(
-                                            graphic.geometry.clone()
-                                        );
-                                    }
-                                });
-
-                                if (updatedGeometry.length < 2) return;
-
-                                const joinedPolygon =
-                                    geometryEngine.union(updatedGeometry);
-                                if (!joinedPolygon) return;
-
-                                selectedGraphics.forEach((graphic) => {
-                                    if (graphic)
-                                        this.sketchLayer.remove(graphic);
-                                });
-
-                                const resultGraphic = new Graphic({
-                                    geometry: joinedPolygon,
-                                    symbol: this.mergeSymbol,
-                                    elevationInfo: {
-                                        mode: "on-the-ground",
-                                    },
-                                    attributes: {
-                                        creator: "clonemail2k2",
-                                        createdAt: new Date().toISOString(),
-                                    },
-                                });
-
-                                this.sketchLayer.add(resultGraphic);
-                                if (this.sketch.updateGraphics) {
-                                    this.sketch.updateGraphics.removeAll();
-                                }
-                            } catch (error) {
-                                console.error("Error during merge:", error);
-                            }
-                        });
-
-                        mergeGroup.appendChild(mergeAction);
-
-                        // Chèn sau polygon group
-                        polygonGroup.parentNode.insertBefore(
-                            mergeGroup,
-                            polygonGroup.nextSibling
-                        );
-
-                        this.mergeButton = mergeAction;
-                        console.log("Merge button added successfully");
-                        return true;
-                    }
-                }
-                return false;
-            };
-
-            // Bật sẵn tooltip và labels khi khởi tạo
+            // Khi sketch ready
             this.sketch.when(() => {
-                // Bật tooltip (chú giải công cụ)
-                if (
-                    this.sketch.viewModel &&
-                    this.sketch.viewModel.tooltipOptions
-                ) {
-                    this.sketch.viewModel.tooltipOptions.enabled = true;
-                }
+                // Bật tooltip và labels
+                this.enableTooltipsAndLabels();
 
-                // Bật labels (nhãn phân vùng)
-                if (
-                    this.sketch.viewModel &&
-                    this.sketch.viewModel.labelOptions
-                ) {
-                    this.sketch.viewModel.labelOptions.enabled = true;
-                }
-
-                // Hoặc sử dụng cách khác nếu API khác
-                if (this.sketch.viewModel) {
-                    this.sketch.viewModel.set("tooltipsEnabled", true);
-                    this.sketch.viewModel.set("labelsEnabled", true);
-                }
-
-                // Thử tạo merge button ngay lập tức
-                setTimeout(() => {
-                    if (createMergeButton()) {
-                        return; // Đã tạo thành công
-                    }
-
-                    // Nếu chưa tạo được, dùng MutationObserver
-                    const sketchContainer = this.sketch.container;
-                    const observer = new MutationObserver((mutations) => {
-                        if (createMergeButton()) {
-                            observer.disconnect();
-                        }
-                    });
-
-                    observer.observe(sketchContainer, {
-                        childList: true,
-                        subtree: true,
-                        attributes: true,
-                        attributeFilter: ["calcite-hydrated"],
-                    });
-                }, 1000);
-            });
-
-            // Handle sketch events
-            this.sketch.on("create", (event) => {
-                if (event.state === "complete") {
-                    const graphic = event.graphic;
-                    if (graphic) {
-                        graphic.symbol = this.fillSymbol;
-                        graphic.elevationInfo = {
-                            mode: "on-the-ground",
-                        };
-                    }
-                }
-            });
-
-            // Theo dõi update event để cập nhật button merge
-            this.sketch.on("update", (event) => {
-                updateMergeButtonVisibility(event);
-
-                if (event.state === "complete" && this.mergeButton) {
-                    this.mergeButton.style.display = "none";
-                }
+                // Setup merge button
+                this.setupMergeButton(
+                    webMercatorUtils,
+                    geometryEngine,
+                    Graphic
+                );
             });
         }.bind(this));
     },
@@ -1209,6 +1223,10 @@ const SketchManager = {
         if (!this.sketch.visible) {
             if (this.mergeButton) {
                 this.mergeButton.style.display = "none";
+            }
+        } else {
+            if (this.mergeButton) {
+                this.mergeButton.style.display = "block";
             }
         }
 
