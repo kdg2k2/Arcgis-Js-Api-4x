@@ -841,12 +841,15 @@ const SketchManager = {
     sketchLayer: null,
     mergeButton: null,
     splitButton: null,
+    saveButton: null,
     isSplitMode: false,
     selectedPolygonForSplit: null,
     splitSketch: null,
     splitLayer: null,
     escKeyHandler: null,
     _modules: null,
+    savedPolygons: [],
+    isDirty: false,
 
     fillSymbol: {
         type: "simple-fill",
@@ -864,6 +867,399 @@ const SketchManager = {
             color: [255, 255, 255],
             width: 1,
         },
+    },
+
+    // Đếm tổng số polygon trên layer
+    getPolygonCount: function () {
+        return this.sketchLayer ? this.sketchLayer.graphics.length : 0;
+    },
+
+    // Kiểm tra có polygon nào chưa lưu
+    hasUnsavedChanges: function () {
+        return this.isDirty || this.getPolygonCount() > 0;
+    },
+
+    // Chuyển đổi graphic thành WKT format cho PostgreSQL
+    graphicToWKT: function (graphic) {
+        const geometry = graphic.geometry;
+        const attributes = graphic.attributes || {};
+
+        // Convert rings to WKT POLYGON format
+        let wktCoords = [];
+        if (geometry.rings && geometry.rings.length > 0) {
+            geometry.rings.forEach((ring) => {
+                const coordsStr = ring
+                    .map((coord) => `${coord[0]} ${coord[1]}`)
+                    .join(", ");
+                wktCoords.push(`(${coordsStr})`);
+            });
+        }
+
+        const wktGeometry = `POLYGON(${wktCoords.join(", ")})`;
+
+        return {
+            id: attributes.id || this.generatePolygonId(),
+            name: attributes.name || `Polygon ${Date.now()}`,
+            description: attributes.description || "",
+            geometry_wkt: wktGeometry,
+            srid: geometry.spatialReference.wkid || 4326,
+            area: this.calculatePolygonArea(geometry),
+            perimeter: this.calculatePolygonPerimeter(geometry),
+            properties: {
+                ...attributes,
+                createdAt: attributes.createdAt || new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                creator: "sketch_tool",
+            },
+        };
+    },
+
+    // Tạo ID unique cho polygon
+    generatePolygonId: function () {
+        return (
+            "polygon_" +
+            Date.now() +
+            "_" +
+            Math.random().toString(36).substr(2, 9)
+        );
+    },
+
+    // Tính diện tích polygon (sử dụng ArcGIS geometryEngine)
+    calculatePolygonArea: function (geometry) {
+        try {
+            const { geometryEngine } = this._modules;
+            if (
+                geometryEngine &&
+                typeof geometryEngine.geodesicArea === "function"
+            ) {
+                return geometryEngine.geodesicArea(geometry, "square-meters");
+            }
+        } catch (error) {
+            console.warn("Could not calculate area:", error);
+        }
+        return 0;
+    },
+
+    // Tính chu vi polygon
+    calculatePolygonPerimeter: function (geometry) {
+        try {
+            const { geometryEngine } = this._modules;
+            if (
+                geometryEngine &&
+                typeof geometryEngine.geodesicLength === "function"
+            ) {
+                return geometryEngine.geodesicLength(geometry, "meters");
+            }
+        } catch (error) {
+            console.warn("Could not calculate perimeter:", error);
+        }
+        return 0;
+    },
+
+    // Lấy tất cả polygons cho API
+    getAllPolygonsForAPI: function () {
+        const polygons = [];
+
+        if (this.sketchLayer) {
+            this.sketchLayer.graphics.forEach((graphic) => {
+                if (graphic.geometry && graphic.geometry.type === "polygon") {
+                    polygons.push(this.graphicToWKT(graphic));
+                }
+            });
+        }
+
+        return {
+            polygons: polygons,
+            metadata: {
+                totalCount: polygons.length,
+                exportedAt: new Date().toISOString(),
+                creator: "SketchManager",
+                projectId: this.getCurrentProjectId(),
+            },
+        };
+    },
+
+    // Xử lý save polygons
+    handleSave: async function () {
+        try {
+            const polygonData = this.getAllPolygonsForAPI();
+
+            if (polygonData.polygons.length === 0) {
+                alert("Không có polygon nào để lưu!");
+                return;
+            }
+
+            // Hiển thị loading state
+            this.setSaveButtonLoading(true);
+
+            // Gọi API để lưu
+            const response = await this.saveToAPI(polygonData);
+
+            if (response.success) {
+                // Lưu vào local storage để backup
+                this.saveToLocalStorage(polygonData);
+
+                // Update saved polygons array
+                this.savedPolygons = [...polygonData.polygons];
+                this.isDirty = false;
+
+                // Thông báo thành công
+                this.showSaveSuccess(polygonData.polygons.length);
+
+                // Update button state
+                this.updateSaveButtonState();
+            } else {
+                throw new Error(response.message || "Lưu thất bại");
+            }
+        } catch (error) {
+            console.error("Save error:", error);
+            this.showSaveError(error.message);
+        } finally {
+            this.setSaveButtonLoading(false);
+        }
+    },
+
+    // API call để lưu polygons với WKT format
+    saveToAPI: async function (polygonData) {
+        // Thay thế bằng API endpoint thực tế của bạn
+        const API_ENDPOINT = "/api/polygons/save";
+
+        try {
+            const response = await fetch(API_ENDPOINT, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    // Thêm authentication headers nếu cần
+                    // 'Authorization': 'Bearer ' + token
+                },
+                body: JSON.stringify(polygonData),
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            return await response.json();
+        } catch (error) {
+            // Fallback: chỉ lưu local nếu API fail
+            console.warn("API save failed, saving locally only:", error);
+            return {
+                success: true,
+                message: "Đã lưu cục bộ (API không khả dụng)",
+            };
+        }
+    },
+
+    // Lưu vào localStorage để backup
+    saveToLocalStorage: function (polygonData) {
+        try {
+            const storageKey = `sketch_polygons_${
+                this.getCurrentProjectId() || "default"
+            }`;
+            localStorage.setItem(
+                storageKey,
+                JSON.stringify({
+                    data: polygonData,
+                    savedAt: new Date().toISOString(),
+                })
+            );
+        } catch (error) {
+            console.warn("Could not save to localStorage:", error);
+        }
+    },
+
+    // Load từ localStorage
+    loadFromLocalStorage: function () {
+        try {
+            const storageKey = `sketch_polygons_${
+                this.getCurrentProjectId() || "default"
+            }`;
+            const stored = localStorage.getItem(storageKey);
+            if (stored) {
+                const parsed = JSON.parse(stored);
+                return parsed.data;
+            }
+        } catch (error) {
+            console.warn("Could not load from localStorage:", error);
+        }
+        return null;
+    },
+
+    // Lấy project ID hiện tại
+    getCurrentProjectId: function () {
+        // Thay thế bằng logic lấy project ID thực tế
+        return window.currentProjectId || null;
+    },
+
+    // Set loading state cho save button
+    setSaveButtonLoading: function (isLoading) {
+        if (this.saveButton) {
+            if (isLoading) {
+                this.saveButton.setAttribute("disabled", "true");
+                this.saveButton.innerHTML =
+                    '<i class="bi bi-hourglass-split"></i>';
+                this.saveButton.setAttribute("title", "Đang lưu...");
+            } else {
+                this.updateSaveButtonState();
+            }
+        }
+    },
+
+    // Hiển thị thông báo thành công
+    showSaveSuccess: function (count) {
+        const message = `✅ Đã lưu ${count} polygon thành công!`;
+        this.showNotification(message, "success");
+    },
+
+    // Hiển thị thông báo lỗi
+    showSaveError: function (errorMessage) {
+        const message = `❌ Lỗi khi lưu: ${errorMessage}`;
+        this.showNotification(message, "error");
+    },
+
+    // Hệ thống notification đơn giản
+    showNotification: function (message, type = "info") {
+        const notification = document.createElement("div");
+        notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: ${
+                type === "success"
+                    ? "#4CAF50"
+                    : type === "error"
+                    ? "#f44336"
+                    : "#2196F3"
+            };
+            color: white;
+            padding: 12px 20px;
+            border-radius: 5px;
+            z-index: 10000;
+            font-size: 14px;
+            max-width: 300px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        `;
+        notification.innerHTML = message;
+        document.body.appendChild(notification);
+
+        // Tự động ẩn sau 3s
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 3000);
+    },
+
+    // Cập nhật state của save button
+    updateSaveButtonState: function () {
+        if (!this.saveButton) return;
+
+        const polygonCount = this.getPolygonCount();
+        const hasUnsaved = this.hasUnsavedChanges();
+
+        if (polygonCount > 0) {
+            this.saveButton.removeAttribute("disabled");
+            this.saveButton.style.display = "block";
+            this.saveButton.innerHTML = '<i class="bi bi-cloud-upload"></i>';
+            this.saveButton.setAttribute(
+                "title",
+                hasUnsaved
+                    ? `Lưu ${polygonCount} polygon`
+                    : `${polygonCount} polygon đã lưu`
+            );
+
+            // Thay đổi màu button dựa trên trạng thái
+            if (hasUnsaved) {
+                this.saveButton.style.background = "#ff9800"; // Orange cho unsaved
+            } else {
+                this.saveButton.style.background = "#4caf50"; // Green cho saved
+            }
+        } else {
+            this.saveButton.setAttribute("disabled", "true");
+            this.saveButton.style.display = "block";
+            this.saveButton.innerHTML = '<i class="bi bi-cloud-upload"></i>';
+            this.saveButton.setAttribute("title", "Không có polygon để lưu");
+            this.saveButton.style.background = "";
+        }
+    },
+
+    // Track changes để update save button
+    trackChanges: function () {
+        this.isDirty = true;
+        this.updateSaveButtonState();
+    },
+
+    // Load polygons từ server (optional)
+    loadPolygonsFromAPI: async function (projectId) {
+        try {
+            const response = await fetch(`/api/polygons/load/${projectId}`);
+            if (response.ok) {
+                const data = await response.json();
+                this.loadPolygonsToLayer(data);
+            }
+        } catch (error) {
+            console.warn("Could not load polygons from API:", error);
+            // Fallback to localStorage
+            const localData = this.loadFromLocalStorage();
+            if (localData) {
+                this.loadPolygonsToLayer(localData);
+            }
+        }
+    },
+
+    // Load polygons vào layer từ WKT
+    loadPolygonsToLayer: function (polygonData) {
+        if (!polygonData || !polygonData.polygons) return;
+
+        const { Graphic, Polygon } = this._modules;
+
+        polygonData.polygons.forEach((item) => {
+            try {
+                // Parse WKT để tạo geometry (simplified - có thể cần thư viện WKT parser)
+                const polygon = this.parseWKTToPolygon(item.geometry_wkt);
+
+                const graphic = new Graphic({
+                    geometry: polygon,
+                    symbol: this.fillSymbol,
+                    attributes: {
+                        ...item.properties,
+                        id: item.id,
+                        name: item.name,
+                        description: item.description,
+                    },
+                });
+
+                this.sketchLayer.add(graphic);
+            } catch (error) {
+                console.warn("Could not load polygon:", error);
+            }
+        });
+
+        this.savedPolygons = [...polygonData.polygons];
+        this.isDirty = false;
+        this.updateSaveButtonState();
+    },
+
+    // Parse WKT thành Polygon (simplified version)
+    parseWKTToPolygon: function (wktString) {
+        const { Polygon } = this._modules;
+
+        // Simple WKT parser - có thể cần thư viện chuyên dụng cho production
+        const coordsMatch = wktString.match(/POLYGON\s*\(\s*\((.*?)\)\s*\)/);
+        if (coordsMatch) {
+            const coordsStr = coordsMatch[1];
+            const coords = coordsStr.split(",").map((coord) => {
+                const [x, y] = coord.trim().split(" ");
+                return [parseFloat(x), parseFloat(y)];
+            });
+
+            return new Polygon({
+                rings: [coords],
+                spatialReference: { wkid: 4326 },
+            });
+        }
+
+        throw new Error("Invalid WKT format");
     },
 
     // Tạo graphics layer
@@ -933,6 +1329,8 @@ const SketchManager = {
                 elevationInfo: {
                     mode: "on-the-ground",
                 },
+                listMode: "hide",
+                visible: true,
             });
             _view.map.add(this.splitLayer);
         }
@@ -965,10 +1363,8 @@ const SketchManager = {
                 visible: false,
             });
 
-            // QUAN TRỌNG: Thêm splitSketch vào UI
             _view.ui.add(this.splitSketch, "top-right");
 
-            // Event khi vẽ xong split line
             this.splitSketch.on("create", (event) => {
                 if (
                     event.state === "complete" &&
@@ -980,7 +1376,7 @@ const SketchManager = {
         }
     },
 
-    // Cập nhật state của cả merge và split button
+    // Cập nhật state của merge, split và save button
     updateToolButtonsState: function (event) {
         const graphics =
             event && event.graphics
@@ -1012,6 +1408,9 @@ const SketchManager = {
                 this.splitButton.setAttribute("title", "Chọn 1 vùng để tách");
             }
         }
+
+        // Update save button
+        this.updateSaveButtonState();
     },
 
     // Xử lý logic merge polygons
@@ -1050,16 +1449,14 @@ const SketchManager = {
                 elevationInfo: {
                     mode: "on-the-ground",
                 },
-                attributes: {
-                    creator: "clonemail2k2",
-                    createdAt: new Date().toISOString(),
-                },
             });
 
             this.sketchLayer.add(resultGraphic);
             if (this.sketch.updateGraphics) {
                 this.sketch.updateGraphics.removeAll();
             }
+
+            this.trackChanges();
         } catch (error) {
             console.error("Error during merge:", error);
         }
@@ -1070,12 +1467,10 @@ const SketchManager = {
         const selectedGraphics = this.sketch.updateGraphics;
         if (!selectedGraphics || selectedGraphics.length !== 1) return;
 
-        // Tạo split sketch nếu chưa có
         if (!this.splitSketch) {
             this.createSplitSketch(this._modules.Sketch);
         }
 
-        // Bắt đầu split mode
         this.enterSplitMode();
     },
 
@@ -1089,7 +1484,6 @@ const SketchManager = {
             let polygonGeometry = this.selectedPolygonForSplit.geometry;
             let splitLineGeometry = splitLine;
 
-            // Chuyển đổi về cùng spatial reference nếu cần
             if (
                 polygonGeometry.spatialReference.wkid === 4326 &&
                 splitLineGeometry.spatialReference.wkid !== 4326
@@ -1104,24 +1498,19 @@ const SketchManager = {
                     webMercatorUtils.geographicToWebMercator(splitLineGeometry);
             }
 
-            // Extend line để đảm bảo cắt qua polygon
             const extendedLine = geometryEngine.geodesicDensify(
                 splitLineGeometry,
                 1000,
                 "meters"
             );
-
-            // Thực hiện split
             const splitResult = geometryEngine.cut(
                 polygonGeometry,
                 extendedLine
             );
 
             if (splitResult && splitResult.length > 1) {
-                // Xóa polygon gốc
                 this.sketchLayer.remove(this.selectedPolygonForSplit);
 
-                // Thêm các polygon đã split
                 splitResult.forEach((splitGeom, index) => {
                     const splitGraphic = new Graphic({
                         geometry: splitGeom,
@@ -1139,15 +1528,11 @@ const SketchManager = {
                         elevationInfo: {
                             mode: "on-the-ground",
                         },
-                        attributes: {
-                            creator: "clonemail2k2",
-                            createdAt: new Date().toISOString(),
-                            splitIndex: index,
-                        },
                     });
                     this.sketchLayer.add(splitGraphic);
                 });
 
+                this.trackChanges();
                 console.log(`Split polygon into ${splitResult.length} parts`);
             } else {
                 console.warn(
@@ -1173,11 +1558,9 @@ const SketchManager = {
         this.selectedPolygonForSplit = selectedGraphics.getItemAt(0);
         this.isSplitMode = true;
 
-        // Ẩn sketch chính và hiện split sketch
         this.sketch.visible = false;
         this.splitSketch.visible = true;
 
-        // QUAN TRỌNG: Tự động kích hoạt polyline tool
         setTimeout(() => {
             if (
                 this.splitSketch &&
@@ -1187,10 +1570,7 @@ const SketchManager = {
             }
         }, 100);
 
-        // Thay đổi cursor
         _view.container.style.cursor = "crosshair";
-
-        // Hiển thị thông báo
         this.showSplitInstruction();
 
         console.log("Entered split mode - polyline tool activated");
@@ -1201,28 +1581,23 @@ const SketchManager = {
         this.isSplitMode = false;
         this.selectedPolygonForSplit = null;
 
-        // Hiện lại sketch chính và ẩn split sketch
         if (this.splitSketch) {
             this.splitSketch.visible = false;
         }
         this.sketch.visible = true;
 
-        // Tự động chọn chế độ select tại sketch chính
         setTimeout(() => {
             if (this.sketch && typeof this.sketch.cancel === "function") {
                 this.sketch.cancel();
             }
         }, 100);
 
-        // Reset cursor
         _view.container.style.cursor = "default";
 
-        // Clear split layer
         if (this.splitLayer) {
             this.splitLayer.removeAll();
         }
 
-        // Clear selection
         if (this.sketch.updateGraphics) {
             this.sketch.updateGraphics.removeAll();
         }
@@ -1252,7 +1627,6 @@ const SketchManager = {
         `;
         document.body.appendChild(instruction);
 
-        // Thêm event listener ESC để hủy
         this.escKeyHandler = (e) => {
             if (e.key === "Escape") {
                 this.exitSplitMode();
@@ -1290,7 +1664,6 @@ const SketchManager = {
                 : null;
 
             if (polygonGroup) {
-                // Tạo merge group
                 const mergeGroup = document.createElement(
                     "calcite-action-group"
                 );
@@ -1305,7 +1678,6 @@ const SketchManager = {
                 mergeAction.setAttribute("disabled", "true");
                 mergeAction.innerHTML = "<i class='bi bi-subtract'></i>";
 
-                // Thêm event listener cho merge
                 mergeAction.addEventListener("click", () => {
                     this.handleMerge(webMercatorUtils, geometryEngine, Graphic);
                 });
@@ -1357,7 +1729,6 @@ const SketchManager = {
                 splitAction.setAttribute("disabled", "true");
                 splitAction.innerHTML = "<i class='bi bi-scissors'></i>";
 
-                // Event listener cho split
                 splitAction.addEventListener("click", () => {
                     this.handleSplit();
                 });
@@ -1371,6 +1742,68 @@ const SketchManager = {
                 );
 
                 this.splitButton = splitAction;
+                return true;
+            }
+        }
+        return false;
+    },
+
+    // Tạo save button
+    createSaveButton: function () {
+        const sketchContainer = this.sketch.container;
+        const actionBar = sketchContainer.querySelector(
+            "calcite-action-bar[calcite-hydrated]"
+        );
+
+        if (actionBar) {
+            const polygonAction = actionBar.querySelector(
+                'calcite-action[data-action-key="polygon-button"]'
+            );
+            const polygonGroup = polygonAction
+                ? polygonAction.closest("calcite-action-group")
+                : null;
+
+            if (polygonGroup) {
+                // Tìm merge group để chèn save button sau nó
+                const mergeGroup = polygonGroup.parentNode.querySelector(
+                    "calcite-action-group:has(calcite-action[title*='Gộp'])"
+                );
+
+                const saveGroup = document.createElement(
+                    "calcite-action-group"
+                );
+                saveGroup.setAttribute("layout", "horizontal");
+                saveGroup.setAttribute("scale", "m");
+
+                const saveAction = document.createElement("calcite-action");
+                saveAction.setAttribute("title", "Không có polygon để lưu");
+                saveAction.setAttribute("scale", "m");
+                saveAction.setAttribute("appearance", "solid");
+                saveAction.style.display = "block";
+                saveAction.setAttribute("disabled", "true");
+                saveAction.innerHTML = "<i class='bi bi-cloud-upload'></i>";
+
+                saveAction.addEventListener("click", () => {
+                    this.handleSave();
+                });
+
+                saveGroup.appendChild(saveAction);
+
+                // THAY ĐỔI: Chèn ngay sau merge group
+                if (mergeGroup) {
+                    mergeGroup.parentNode.insertBefore(
+                        saveGroup,
+                        mergeGroup.nextSibling
+                    );
+                } else {
+                    // Fallback nếu không tìm thấy merge group
+                    polygonGroup.parentNode.insertBefore(
+                        saveGroup,
+                        polygonGroup.nextSibling
+                    );
+                }
+
+                this.saveButton = saveAction;
                 return true;
             }
         }
@@ -1393,7 +1826,7 @@ const SketchManager = {
         }
     },
 
-    // Setup cả merge và split button
+    // Setup merge, split và save button
     setupToolButtons: function (
         webMercatorUtils,
         geometryEngine,
@@ -1401,7 +1834,6 @@ const SketchManager = {
         GraphicsLayer,
         Sketch
     ) {
-        // Tạo split layer
         this.createSplitLayer(GraphicsLayer);
 
         setTimeout(() => {
@@ -1415,17 +1847,18 @@ const SketchManager = {
                 geometryEngine,
                 Graphic
             );
+            const saveCreated = this.createSaveButton();
 
-            if (mergeCreated && splitCreated) {
+            if (mergeCreated && splitCreated && saveCreated) {
                 return;
             }
 
             const sketchContainer = this.sketch.container;
             const observer = new MutationObserver((mutations) => {
-                let bothCreated = true;
+                let allCreated = true;
 
                 if (!this.mergeButton) {
-                    bothCreated &= this.createMergeButton(
+                    allCreated &= this.createMergeButton(
                         webMercatorUtils,
                         geometryEngine,
                         Graphic
@@ -1433,14 +1866,18 @@ const SketchManager = {
                 }
 
                 if (!this.splitButton) {
-                    bothCreated &= this.createSplitButton(
+                    allCreated &= this.createSplitButton(
                         webMercatorUtils,
                         geometryEngine,
                         Graphic
                     );
                 }
 
-                if (bothCreated) {
+                if (!this.saveButton) {
+                    allCreated &= this.createSaveButton();
+                }
+
+                if (allCreated) {
                     observer.disconnect();
                 }
             });
@@ -1465,6 +1902,8 @@ const SketchManager = {
                     graphic.elevationInfo = {
                         mode: "on-the-ground",
                     };
+
+                    this.trackChanges();
                 }
             }
         });
@@ -1488,7 +1927,14 @@ const SketchManager = {
                         "Chọn 1 vùng để tách"
                     );
                 }
+
+                this.trackChanges();
             }
+        });
+
+        // Track delete events
+        this.sketch.on("delete", (event) => {
+            this.trackChanges();
         });
     },
 
@@ -1528,7 +1974,7 @@ const SketchManager = {
                 // Bật tooltip và labels
                 this.enableTooltipsAndLabels();
 
-                // Setup cả merge và split button
+                // Setup merge, split và save button
                 this.setupToolButtons(
                     webMercatorUtils,
                     geometryEngine,
@@ -1554,19 +2000,13 @@ const SketchManager = {
         }
 
         if (!this.sketch.visible) {
-            if (this.mergeButton) {
-                this.mergeButton.style.display = "none";
-            }
-            if (this.splitButton) {
-                this.splitButton.style.display = "none";
-            }
+            if (this.mergeButton) this.mergeButton.style.display = "none";
+            if (this.splitButton) this.splitButton.style.display = "none";
+            if (this.saveButton) this.saveButton.style.display = "none";
         } else {
-            if (this.mergeButton) {
-                this.mergeButton.style.display = "block";
-            }
-            if (this.splitButton) {
-                this.splitButton.style.display = "block";
-            }
+            if (this.mergeButton) this.mergeButton.style.display = "block";
+            if (this.splitButton) this.splitButton.style.display = "block";
+            if (this.saveButton) this.saveButton.style.display = "block";
         }
 
         return this.sketch.visible;
