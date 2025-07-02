@@ -58,7 +58,6 @@ const WMSLayerManager = {
     },
 
     zoomToWMSExtent(wmsUrl, layerName) {
-        console.log("Starting zoomToWMSExtent with:", { wmsUrl, layerName });
         const capsURL = `${wmsUrl}?SERVICE=WMS&REQUEST=GetCapabilities&VERSION=1.3.0`;
 
         fetch(capsURL)
@@ -73,32 +72,14 @@ const WMSLayerManager = {
                 const xmlDoc = parser.parseFromString(text, "text/xml");
                 const layers = xmlDoc.getElementsByTagName("Layer");
 
-                console.log("Found layers:", layers.length);
-
                 for (let layer of layers) {
                     const nameElement = layer.getElementsByTagName("Name")[0];
                     if (nameElement) {
                         const layerFullName = nameElement.textContent;
-                        console.log("Checking layer:", {
-                            layerFullName,
-                            searchingFor: layerName,
-                            matches: layerFullName.includes(layerName),
-                        });
-
                         if (layerFullName.includes(layerName)) {
                             const bboxElement =
                                 layer.getElementsByTagName("BoundingBox")[0];
                             if (bboxElement) {
-                                console.log(
-                                    "Found matching layer with BoundingBox:",
-                                    {
-                                        minx: bboxElement.getAttribute("minx"),
-                                        miny: bboxElement.getAttribute("miny"),
-                                        maxx: bboxElement.getAttribute("maxx"),
-                                        maxy: bboxElement.getAttribute("maxy"),
-                                    }
-                                );
-
                                 require(["esri/geometry/Extent"], function (
                                     Extent
                                 ) {
@@ -118,8 +99,6 @@ const WMSLayerManager = {
                                         spatialReference: { wkid: 4326 },
                                     });
 
-                                    console.log("Created extent:", extent);
-
                                     setTimeout(() => {
                                         _view
                                             .goTo(
@@ -136,11 +115,7 @@ const WMSLayerManager = {
                                                     easing: "out-quad",
                                                 }
                                             )
-                                            .then(() => {
-                                                console.log(
-                                                    "Zoom completed successfully"
-                                                );
-                                            })
+                                            .then(() => {})
                                             .catch((error) => {
                                                 console.error(
                                                     "Zoom failed:",
@@ -220,8 +195,6 @@ const WMSLayerManager = {
     createAndAddWMSLayer: function (config, options = {}) {
         return new Promise((resolve, reject) => {
             require(["esri/layers/WMSLayer"], function (WMSLayer) {
-                console.log(`Creating WMS layer for: ${config.id}`);
-
                 // Xử lý CQL Filter
                 const cqlFilter = this.buildCQLFilter(
                     config.cqlFilter,
@@ -234,13 +207,6 @@ const WMSLayerManager = {
                     format: "image/png",
                     ...(cqlFilter && { CQL_FILTER: cqlFilter }),
                 };
-
-                console.log(`WMS Parameters for ${config.id}:`, {
-                    url: config.url,
-                    layer: config.layer,
-                    cqlFilter: cqlFilter,
-                    timestamp: new Date().toISOString(),
-                });
 
                 const wmsLayer = new WMSLayer({
                     url: config.url,
@@ -257,11 +223,6 @@ const WMSLayerManager = {
                 wmsLayer
                     .load()
                     .then(() => {
-                        console.log(
-                            `WMS layer ${
-                                config.id
-                            } loaded successfully at ${new Date().toISOString()}`
-                        );
                         _map.add(wmsLayer);
                         _wmsLayers.set(config.id, wmsLayer);
 
@@ -299,17 +260,11 @@ const WMSLayerManager = {
     },
 
     loadDefaultWMSLayers: function () {
-        console.log("Loading default WMS layers...");
         const defaultLayers = WMS_LAYERS.filter(
             (config) => config.defaultVisible
         ).sort((a, b) => a.zoomPriority - b.zoomPriority);
 
-        console.log("Default layers to load:", defaultLayers);
-
-        if (defaultLayers.length === 0) {
-            console.log("No default layers configured");
-            return;
-        }
+        if (defaultLayers.length === 0) return;
 
         const loadPromises = defaultLayers.map((config) =>
             this.createAndAddWMSLayer(config)
@@ -317,7 +272,6 @@ const WMSLayerManager = {
 
         Promise.all(loadPromises)
             .then(() => {
-                console.log("All default layers loaded");
                 if (defaultLayers.length > 0) {
                     const highestPriorityLayer = defaultLayers[0];
                     this.zoomToWMSExtent(
@@ -333,8 +287,6 @@ const WMSLayerManager = {
 
     // Hàm truy vấn thông tin WMS
     getFeatureInfo: function (event, wmsLayer, wmsConfig, additionalCqlFilter) {
-        console.log("Starting getFeatureInfo");
-
         return new Promise((resolve, reject) => {
             require(["esri/geometry/support/webMercatorUtils"], (
                 webMercatorUtils
@@ -418,7 +370,6 @@ const WMSLayerManager = {
                 const getFeatureInfoUrl = `${url.origin}${
                     url.pathname
                 }?${params.toString()}`;
-                console.log("GetFeatureInfo URL:", getFeatureInfoUrl);
 
                 // Thực hiện request
                 const xhr = new XMLHttpRequest();
@@ -476,7 +427,6 @@ const WMSLayerManager = {
                                 "Error parsing GetFeatureInfo response:",
                                 e
                             );
-                            console.log("Raw response:", xhr.responseText);
                             resolve({
                                 layerId: wmsConfig.id,
                                 layerName: wmsConfig.name,
@@ -705,9 +655,7 @@ const WMSLayerManager = {
 
             if (result.data && result.data[0]) {
                 const props = result.data[0].properties;
-                // Giả sử bạn muốn dùng trường 'tt' (nhưng thực tế là 'TT')
                 const ttField = this.findFieldCaseInsensitive(props, "tt");
-                console.log({ props, ttField }); // Xem để chắc chắn
 
                 if (ttField && props[ttField] !== undefined) {
                     // Nếu trường kiểu chuỗi
@@ -971,7 +919,6 @@ const SketchManager = {
 
     // Cập nhật visibility/state của merge button
     updateMergeButtonState: function (event) {
-        console.log("Update event:", event);
         const graphics =
             event && event.graphics
                 ? event.graphics
@@ -1086,7 +1033,6 @@ const SketchManager = {
                 );
 
                 this.mergeButton = mergeAction;
-                console.log("Merge button added successfully");
                 return true;
             }
         }
@@ -1446,18 +1392,10 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
         });
 
         _view.when(() => {
-            console.log("View loaded at:", new Date().toISOString());
-
             // Khởi tạo các managers
             SketchManager.initialize(_view);
             ControlManager.initializeControls(_view);
             WMSLayerManager.loadDefaultWMSLayers();
-        });
-
-        _view.watch("updating", function (val) {
-            if (!val) {
-                console.log("Map loaded completely");
-            }
         });
 
         _view.on("click", (event) => {
