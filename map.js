@@ -840,6 +840,13 @@ const SketchManager = {
     sketch: null,
     sketchLayer: null,
     mergeButton: null,
+    splitButton: null,
+    isSplitMode: false,
+    selectedPolygonForSplit: null,
+    splitSketch: null,
+    splitLayer: null,
+    escKeyHandler: null,
+    _modules: null,
 
     fillSymbol: {
         type: "simple-fill",
@@ -917,14 +924,71 @@ const SketchManager = {
         view.ui.add(this.sketch, "top-right");
     },
 
-    // Cập nhật visibility/state của merge button
-    updateMergeButtonState: function (event) {
+    // Tạo temporary layer cho split line
+    createSplitLayer: function (GraphicsLayer) {
+        if (!this.splitLayer) {
+            this.splitLayer = new GraphicsLayer({
+                id: "splitLayer",
+                title: "Split Layer",
+                elevationInfo: {
+                    mode: "on-the-ground",
+                },
+            });
+            _view.map.add(this.splitLayer);
+        }
+    },
+
+    // Tạo sketch widget riêng cho split line
+    createSplitSketch: function (Sketch) {
+        if (!this.splitSketch) {
+            this.splitSketch = new Sketch({
+                view: _view,
+                layer: this.splitLayer,
+                creationMode: "single",
+                availableCreateTools: ["polyline"],
+                defaultCreateOptions: {
+                    mode: "click",
+                },
+                visibleElements: {
+                    createTools: {
+                        point: false,
+                        polyline: true,
+                        polygon: false,
+                    },
+                    selectionTools: {
+                        "lasso-selection": false,
+                        "rectangle-selection": false,
+                    },
+                    settingsMenu: false,
+                    undoRedoMenu: false,
+                },
+                visible: false,
+            });
+
+            // QUAN TRỌNG: Thêm splitSketch vào UI
+            _view.ui.add(this.splitSketch, "top-right");
+
+            // Event khi vẽ xong split line
+            this.splitSketch.on("create", (event) => {
+                if (
+                    event.state === "complete" &&
+                    this.selectedPolygonForSplit
+                ) {
+                    this.performSplit(event.graphic.geometry);
+                }
+            });
+        }
+    },
+
+    // Cập nhật state của cả merge và split button
+    updateToolButtonsState: function (event) {
         const graphics =
             event && event.graphics
                 ? event.graphics
                 : this.sketch.updateGraphics;
         const count = graphics ? graphics.length : 0;
 
+        // Update merge button
         if (this.mergeButton) {
             if (count > 1) {
                 this.mergeButton.removeAttribute("disabled");
@@ -935,6 +999,17 @@ const SketchManager = {
                     "title",
                     "Chọn ít nhất 2 vùng để gộp"
                 );
+            }
+        }
+
+        // Update split button
+        if (this.splitButton) {
+            if (count === 1) {
+                this.splitButton.removeAttribute("disabled");
+                this.splitButton.setAttribute("title", "Tách vùng đã chọn");
+            } else {
+                this.splitButton.setAttribute("disabled", "true");
+                this.splitButton.setAttribute("title", "Chọn 1 vùng để tách");
             }
         }
     },
@@ -990,6 +1065,215 @@ const SketchManager = {
         }
     },
 
+    // Hàm xử lý logic split polygon
+    handleSplit: function () {
+        const selectedGraphics = this.sketch.updateGraphics;
+        if (!selectedGraphics || selectedGraphics.length !== 1) return;
+
+        // Tạo split sketch nếu chưa có
+        if (!this.splitSketch) {
+            this.createSplitSketch(this._modules.Sketch);
+        }
+
+        // Bắt đầu split mode
+        this.enterSplitMode();
+    },
+
+    // Thực hiện split với line do user vẽ
+    performSplit: function (splitLine) {
+        if (!this.selectedPolygonForSplit || !splitLine) return;
+
+        const { webMercatorUtils, geometryEngine, Graphic } = this._modules;
+
+        try {
+            let polygonGeometry = this.selectedPolygonForSplit.geometry;
+            let splitLineGeometry = splitLine;
+
+            // Chuyển đổi về cùng spatial reference nếu cần
+            if (
+                polygonGeometry.spatialReference.wkid === 4326 &&
+                splitLineGeometry.spatialReference.wkid !== 4326
+            ) {
+                polygonGeometry =
+                    webMercatorUtils.geographicToWebMercator(polygonGeometry);
+            } else if (
+                polygonGeometry.spatialReference.wkid !== 4326 &&
+                splitLineGeometry.spatialReference.wkid === 4326
+            ) {
+                splitLineGeometry =
+                    webMercatorUtils.geographicToWebMercator(splitLineGeometry);
+            }
+
+            // Extend line để đảm bảo cắt qua polygon
+            const extendedLine = geometryEngine.geodesicDensify(
+                splitLineGeometry,
+                1000,
+                "meters"
+            );
+
+            // Thực hiện split
+            const splitResult = geometryEngine.cut(
+                polygonGeometry,
+                extendedLine
+            );
+
+            if (splitResult && splitResult.length > 1) {
+                // Xóa polygon gốc
+                this.sketchLayer.remove(this.selectedPolygonForSplit);
+
+                // Thêm các polygon đã split
+                splitResult.forEach((splitGeom, index) => {
+                    const splitGraphic = new Graphic({
+                        geometry: splitGeom,
+                        symbol: {
+                            type: "simple-fill",
+                            color:
+                                index === 0
+                                    ? [227, 139, 79, 0.8]
+                                    : [139, 227, 79, 0.8],
+                            outline: {
+                                color: [255, 255, 255],
+                                width: 1,
+                            },
+                        },
+                        elevationInfo: {
+                            mode: "on-the-ground",
+                        },
+                        attributes: {
+                            creator: "clonemail2k2",
+                            createdAt: new Date().toISOString(),
+                            splitIndex: index,
+                        },
+                    });
+                    this.sketchLayer.add(splitGraphic);
+                });
+
+                console.log(`Split polygon into ${splitResult.length} parts`);
+            } else {
+                console.warn(
+                    "Could not split polygon - line may not intersect properly"
+                );
+                alert(
+                    "Không thể tách polygon. Đảm bảo đường cắt đi qua polygon."
+                );
+            }
+        } catch (error) {
+            console.error("Error during split:", error);
+            alert("Lỗi khi tách polygon: " + error.message);
+        } finally {
+            this.exitSplitMode();
+        }
+    },
+
+    // Bắt đầu split mode
+    enterSplitMode: function () {
+        const selectedGraphics = this.sketch.updateGraphics;
+        if (!selectedGraphics || selectedGraphics.length !== 1) return;
+
+        this.selectedPolygonForSplit = selectedGraphics.getItemAt(0);
+        this.isSplitMode = true;
+
+        // Ẩn sketch chính và hiện split sketch
+        this.sketch.visible = false;
+        this.splitSketch.visible = true;
+
+        // QUAN TRỌNG: Tự động kích hoạt polyline tool
+        setTimeout(() => {
+            if (
+                this.splitSketch &&
+                this.splitSketch.activeTool !== "polyline"
+            ) {
+                this.splitSketch.create("polyline");
+            }
+        }, 100);
+
+        // Thay đổi cursor
+        _view.container.style.cursor = "crosshair";
+
+        // Hiển thị thông báo
+        this.showSplitInstruction();
+
+        console.log("Entered split mode - polyline tool activated");
+    },
+
+    // Thoát split mode
+    exitSplitMode: function () {
+        this.isSplitMode = false;
+        this.selectedPolygonForSplit = null;
+
+        // Hiện lại sketch chính và ẩn split sketch
+        if (this.splitSketch) {
+            this.splitSketch.visible = false;
+        }
+        this.sketch.visible = true;
+
+        // Tự động chọn chế độ select tại sketch chính
+        setTimeout(() => {
+            if (this.sketch && typeof this.sketch.cancel === "function") {
+                this.sketch.cancel();
+            }
+        }, 100);
+
+        // Reset cursor
+        _view.container.style.cursor = "default";
+
+        // Clear split layer
+        if (this.splitLayer) {
+            this.splitLayer.removeAll();
+        }
+
+        // Clear selection
+        if (this.sketch.updateGraphics) {
+            this.sketch.updateGraphics.removeAll();
+        }
+
+        this.hideSplitInstruction();
+    },
+
+    // Hiển thị hướng dẫn split
+    showSplitInstruction: function () {
+        const instruction = document.createElement("div");
+        instruction.id = "splitInstruction";
+        instruction.style.cssText = `
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            z-index: 1000;
+            font-size: 14px;
+        `;
+        instruction.innerHTML = `
+            <div>Vẽ đường cắt qua polygon</div>
+            <div><small>Nhấn ESC để hủy</small></div>
+        `;
+        document.body.appendChild(instruction);
+
+        // Thêm event listener ESC để hủy
+        this.escKeyHandler = (e) => {
+            if (e.key === "Escape") {
+                this.exitSplitMode();
+            }
+        };
+        document.addEventListener("keydown", this.escKeyHandler);
+    },
+
+    // Ẩn hướng dẫn split
+    hideSplitInstruction: function () {
+        const instruction = document.getElementById("splitInstruction");
+        if (instruction) {
+            instruction.remove();
+        }
+
+        if (this.escKeyHandler) {
+            document.removeEventListener("keydown", this.escKeyHandler);
+            this.escKeyHandler = null;
+        }
+    },
+
     // Tạo merge button
     createMergeButton: function (webMercatorUtils, geometryEngine, Graphic) {
         const sketchContainer = this.sketch.container;
@@ -1039,6 +1323,60 @@ const SketchManager = {
         return false;
     },
 
+    // Tạo split button
+    createSplitButton: function (webMercatorUtils, geometryEngine, Graphic) {
+        const sketchContainer = this.sketch.container;
+        const actionBar = sketchContainer.querySelector(
+            "calcite-action-bar[calcite-hydrated]"
+        );
+
+        if (actionBar) {
+            const polygonAction = actionBar.querySelector(
+                'calcite-action[data-action-key="polygon-button"]'
+            );
+            const polygonGroup = polygonAction
+                ? polygonAction.closest("calcite-action-group")
+                : null;
+
+            if (polygonGroup) {
+                const mergeGroup = polygonGroup.parentNode.querySelector(
+                    "calcite-action-group:has(calcite-action[title*='Gộp'])"
+                );
+
+                const splitGroup = document.createElement(
+                    "calcite-action-group"
+                );
+                splitGroup.setAttribute("layout", "horizontal");
+                splitGroup.setAttribute("scale", "m");
+
+                const splitAction = document.createElement("calcite-action");
+                splitAction.setAttribute("title", "Chọn 1 vùng để tách");
+                splitAction.setAttribute("scale", "m");
+                splitAction.setAttribute("appearance", "solid");
+                splitAction.style.display = "block";
+                splitAction.setAttribute("disabled", "true");
+                splitAction.innerHTML = "<i class='bi bi-scissors'></i>";
+
+                // Event listener cho split
+                splitAction.addEventListener("click", () => {
+                    this.handleSplit();
+                });
+
+                splitGroup.appendChild(splitAction);
+
+                const insertAfter = mergeGroup || polygonGroup;
+                insertAfter.parentNode.insertBefore(
+                    splitGroup,
+                    insertAfter.nextSibling
+                );
+
+                this.splitButton = splitAction;
+                return true;
+            }
+        }
+        return false;
+    },
+
     // Bật tooltip và labels
     enableTooltipsAndLabels: function () {
         if (this.sketch.viewModel && this.sketch.viewModel.tooltipOptions) {
@@ -1055,30 +1393,54 @@ const SketchManager = {
         }
     },
 
-    // Setup merge button với observer
-    setupMergeButton: function (webMercatorUtils, geometryEngine, Graphic) {
-        // Thử tạo merge button ngay lập tức
+    // Setup cả merge và split button
+    setupToolButtons: function (
+        webMercatorUtils,
+        geometryEngine,
+        Graphic,
+        GraphicsLayer,
+        Sketch
+    ) {
+        // Tạo split layer
+        this.createSplitLayer(GraphicsLayer);
+
         setTimeout(() => {
-            if (
-                this.createMergeButton(
-                    webMercatorUtils,
-                    geometryEngine,
-                    Graphic
-                )
-            ) {
-                return; // Đã tạo thành công
+            const mergeCreated = this.createMergeButton(
+                webMercatorUtils,
+                geometryEngine,
+                Graphic
+            );
+            const splitCreated = this.createSplitButton(
+                webMercatorUtils,
+                geometryEngine,
+                Graphic
+            );
+
+            if (mergeCreated && splitCreated) {
+                return;
             }
 
-            // Nếu chưa tạo được, dùng MutationObserver
             const sketchContainer = this.sketch.container;
             const observer = new MutationObserver((mutations) => {
-                if (
-                    this.createMergeButton(
+                let bothCreated = true;
+
+                if (!this.mergeButton) {
+                    bothCreated &= this.createMergeButton(
                         webMercatorUtils,
                         geometryEngine,
                         Graphic
-                    )
-                ) {
+                    );
+                }
+
+                if (!this.splitButton) {
+                    bothCreated &= this.createSplitButton(
+                        webMercatorUtils,
+                        geometryEngine,
+                        Graphic
+                    );
+                }
+
+                if (bothCreated) {
                     observer.disconnect();
                 }
             });
@@ -1109,14 +1471,23 @@ const SketchManager = {
 
         // Handle update events
         this.sketch.on("update", (event) => {
-            this.updateMergeButtonState(event);
+            this.updateToolButtonsState(event);
 
-            if (event.state === "complete" && this.mergeButton) {
-                this.mergeButton.setAttribute("disabled", "true");
-                this.mergeButton.setAttribute(
-                    "title",
-                    "Chọn ít nhất 2 vùng để gộp"
-                );
+            if (event.state === "complete") {
+                if (this.mergeButton) {
+                    this.mergeButton.setAttribute("disabled", "true");
+                    this.mergeButton.setAttribute(
+                        "title",
+                        "Chọn ít nhất 2 vùng để gộp"
+                    );
+                }
+                if (this.splitButton) {
+                    this.splitButton.setAttribute("disabled", "true");
+                    this.splitButton.setAttribute(
+                        "title",
+                        "Chọn 1 vùng để tách"
+                    );
+                }
             }
         });
     },
@@ -1136,7 +1507,16 @@ const SketchManager = {
             Graphic,
             webMercatorUtils
         ) {
-            // Tạo các components chính - TRUYỀN THAM SỐ
+            // Lưu modules để dùng ở các hàm khác
+            this._modules = {
+                GraphicsLayer,
+                Sketch,
+                geometryEngine,
+                Graphic,
+                webMercatorUtils,
+            };
+
+            // Tạo các components chính
             this.createSketchLayer(view, GraphicsLayer);
             this.createSketchWidget(view, Sketch);
 
@@ -1148,11 +1528,13 @@ const SketchManager = {
                 // Bật tooltip và labels
                 this.enableTooltipsAndLabels();
 
-                // Setup merge button
-                this.setupMergeButton(
+                // Setup cả merge và split button
+                this.setupToolButtons(
                     webMercatorUtils,
                     geometryEngine,
-                    Graphic
+                    Graphic,
+                    GraphicsLayer,
+                    Sketch
                 );
             });
         }.bind(this));
@@ -1166,13 +1548,24 @@ const SketchManager = {
             this.sketchLayer.visible = this.sketch.visible;
         }
 
+        // Thoát split mode nếu đang active
+        if (this.isSplitMode) {
+            this.exitSplitMode();
+        }
+
         if (!this.sketch.visible) {
             if (this.mergeButton) {
                 this.mergeButton.style.display = "none";
             }
+            if (this.splitButton) {
+                this.splitButton.style.display = "none";
+            }
         } else {
             if (this.mergeButton) {
                 this.mergeButton.style.display = "block";
+            }
+            if (this.splitButton) {
+                this.splitButton.style.display = "block";
             }
         }
 
