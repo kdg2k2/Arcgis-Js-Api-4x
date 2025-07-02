@@ -45,6 +45,164 @@ const WMS_LAYERS = [
 
 // Module-level function để xử lý WMS layers
 const WMSLayerManager = {
+    setupCORS(esriConfig) {
+        if (esriConfig.request) {
+            if (!esriConfig.request.corsEnabledServers) {
+                esriConfig.request.corsEnabledServers = [];
+            }
+            // Thêm tất cả các server cần thiết
+            esriConfig.request.corsEnabledServers.push(
+                "bando.ifee.edu.vn",
+                "maps-150.ifee.edu.vn"
+            );
+        }
+    },
+
+    zoomToWMSExtent(wmsUrl, layerName) {
+        console.log("Starting zoomToWMSExtent with:", { wmsUrl, layerName });
+        const capsURL = `${wmsUrl}?SERVICE=WMS&REQUEST=GetCapabilities&VERSION=1.3.0`;
+
+        fetch(capsURL)
+            .then((response) => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.text();
+            })
+            .then((text) => {
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(text, "text/xml");
+                const layers = xmlDoc.getElementsByTagName("Layer");
+
+                console.log("Found layers:", layers.length);
+
+                for (let layer of layers) {
+                    const nameElement = layer.getElementsByTagName("Name")[0];
+                    if (nameElement) {
+                        const layerFullName = nameElement.textContent;
+                        console.log("Checking layer:", {
+                            layerFullName,
+                            searchingFor: layerName,
+                            matches: layerFullName.includes(layerName),
+                        });
+
+                        if (layerFullName.includes(layerName)) {
+                            const bboxElement =
+                                layer.getElementsByTagName("BoundingBox")[0];
+                            if (bboxElement) {
+                                console.log(
+                                    "Found matching layer with BoundingBox:",
+                                    {
+                                        minx: bboxElement.getAttribute("minx"),
+                                        miny: bboxElement.getAttribute("miny"),
+                                        maxx: bboxElement.getAttribute("maxx"),
+                                        maxy: bboxElement.getAttribute("maxy"),
+                                    }
+                                );
+
+                                require(["esri/geometry/Extent"], function (
+                                    Extent
+                                ) {
+                                    const extent = new Extent({
+                                        xmin: parseFloat(
+                                            bboxElement.getAttribute("minx")
+                                        ),
+                                        ymin: parseFloat(
+                                            bboxElement.getAttribute("miny")
+                                        ),
+                                        xmax: parseFloat(
+                                            bboxElement.getAttribute("maxx")
+                                        ),
+                                        ymax: parseFloat(
+                                            bboxElement.getAttribute("maxy")
+                                        ),
+                                        spatialReference: { wkid: 4326 },
+                                    });
+
+                                    console.log("Created extent:", extent);
+
+                                    setTimeout(() => {
+                                        _view
+                                            .goTo(
+                                                {
+                                                    target: extent.expand(1.2),
+                                                    tilt: 0,
+                                                    heading: 0,
+                                                    position: {
+                                                        z: 800000,
+                                                    },
+                                                },
+                                                {
+                                                    duration: 5000,
+                                                    easing: "out-quad",
+                                                }
+                                            )
+                                            .then(() => {
+                                                console.log(
+                                                    "Zoom completed successfully"
+                                                );
+                                            })
+                                            .catch((error) => {
+                                                console.error(
+                                                    "Zoom failed:",
+                                                    error
+                                                );
+                                            });
+                                    }, 2000);
+                                });
+                                return;
+                            } else {
+                                console.log(
+                                    "No BoundingBox found for matching layer"
+                                );
+                            }
+                        }
+                    }
+                }
+                console.log("No matching layer found");
+            })
+            .catch((error) =>
+                console.error("Error getting WMS capabilities:", error)
+            );
+    },
+
+    initializeWMSList(container = document.getElementById("wmsListDiv")) {
+        if (!container) return;
+
+        container.innerHTML = "";
+        const wmsListElement = document.createElement("ul");
+        wmsListElement.className = "wms-list";
+        wmsListElement.style.cssText = `
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    `;
+
+        WMS_LAYERS.forEach((wmsConfig) => {
+            const listItem = document.createElement("li");
+            listItem.className = "wms-item";
+            listItem.style.cssText = `
+            padding: 10px;
+            border-bottom: 1px solid #dee2e6;
+            margin-bottom: 5px;
+        `;
+
+            listItem.innerHTML = `
+            <div class="d-flex justify-content-between align-items-center">
+                <span>${wmsConfig.name}</span>
+                <button class="btn btn-sm btn-outline-primary toggle-wms" 
+                        data-wms-id="${wmsConfig.id}"
+                        onclick="toggleWMSLayer('${wmsConfig.id}', this)">
+                    <i class="bi bi-eye"></i>
+                </button>
+            </div>
+        `;
+            wmsListElement.appendChild(listItem);
+        });
+
+        container.appendChild(wmsListElement);
+    },
+
     // Hàm xử lý CQL Filter
     buildCQLFilter: function (baseFilter, additionalFilter) {
         let filters = [];
@@ -163,7 +321,7 @@ const WMSLayerManager = {
                 console.log("All default layers loaded");
                 if (defaultLayers.length > 0) {
                     const highestPriorityLayer = defaultLayers[0];
-                    zoomToWMSExtent(
+                    this.zoomToWMSExtent(
                         highestPriorityLayer.url,
                         highestPriorityLayer.layer.split(":")[1]
                     );
@@ -731,110 +889,31 @@ const WMSLayerManager = {
     },
 };
 
-// Cập nhật hàm toggle WMS layer
-window.toggleWMSLayer = function (wmsId, button) {
-    const wmsConfig = WMS_LAYERS.find((config) => config.id === wmsId);
-    if (!wmsConfig) return;
+const SketchManager = {
+    sketch: null,
+    sketchLayer: null,
 
-    button.disabled = true;
-
-    if (_wmsLayers.has(wmsId)) {
-        WMSLayerManager.removeWMSLayer(wmsId);
-        button.classList.remove("active");
-        button.innerHTML = '<i class="bi bi-eye"></i>';
-        button.disabled = false;
-    } else {
-        button.innerHTML = '<i class="bi bi-hourglass-split"></i>';
-
-        WMSLayerManager.createAndAddWMSLayer(wmsConfig)
-            .then(() => {
-                button.classList.add("active");
-                button.innerHTML = '<i class="bi bi-eye-slash"></i>';
-
-                const visibleLayers = Array.from(_wmsLayers.keys())
-                    .map((id) => WMS_LAYERS.find((config) => config.id === id))
-                    .sort((a, b) => a.zoomPriority - b.zoomPriority);
-
-                if (visibleLayers[0].id === wmsId) {
-                    zoomToWMSExtent(
-                        wmsConfig.url,
-                        wmsConfig.layer.split(":")[1]
-                    );
-                }
-            })
-            .catch((error) => {
-                console.error("Error toggling WMS layer:", error);
-                button.innerHTML = '<i class="bi bi-eye"></i>';
-            })
-            .finally(() => {
-                button.disabled = false;
-            });
-    }
-};
-
-// Cập nhật hàm initMap3D
-function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
-    require([
-        "esri/Map",
-        "esri/views/SceneView",
-        "esri/layers/WMSLayer",
-        "esri/config",
-        "esri/Camera",
-        "esri/widgets/BasemapGallery",
-        "esri/geometry/Extent",
-        "esri/layers/GraphicsLayer",
-        "esri/widgets/Sketch",
-    ], function (
-        Map,
-        SceneView,
-        WMSLayer,
-        esriConfig,
-        Camera,
-        BasemapGallery,
-        Extent,
-        GraphicsLayer,
-        Sketch
-    ) {
-        setupCORS(esriConfig);
-
-        // Tạo graphics layer cho sketch
-        var sketch;
-        const sketchLayer = new GraphicsLayer({
-            id: "sketchLayer",
-            title: "Sketch Layer",
-            elevationInfo: {
-                mode: "on-the-ground",
-            },
-        });
-
-        _map = new Map({
-            basemap: "dark-gray-vector",
-            ground: "world-elevation",
-            layers: [sketchLayer],
-        });
-
-        _view = new SceneView({
-            container: containerId,
-            map: _map,
-            camera: {
-                position: {
-                    longitude: center[0],
-                    latitude: center[1],
-                    z: 40000000,
+    initialize: function (view) {
+        require(["esri/layers/GraphicsLayer", "esri/widgets/Sketch"], function (
+            GraphicsLayer,
+            Sketch
+        ) {
+            // Tạo graphics layer cho sketch
+            this.sketchLayer = new GraphicsLayer({
+                id: "sketchLayer",
+                title: "Sketch Layer",
+                elevationInfo: {
+                    mode: "on-the-ground",
                 },
-                tilt: 0,
-                heading: 0,
-            },
-            qualityProfile: "high",
-        });
+            });
 
-        _view.when(() => {
-            console.log("View loaded at:", new Date().toISOString());
+            // Thêm layer vào map
+            view.map.add(this.sketchLayer);
 
             // Tạo sketch widget
-            sketch = new Sketch({
-                view: _view,
-                layer: sketchLayer,
+            this.sketch = new Sketch({
+                view: view,
+                layer: this.sketchLayer,
                 creationMode: "update",
                 availableCreateTools: ["polygon"],
                 visibleElements: {
@@ -870,66 +949,249 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
             });
 
             // Thêm sketch widget vào view (mặc định ẩn)
-            sketch.visible = false;
-            _view.ui.add(sketch, "top-right");
-
-            // Tạo button và offcanvas cho basemap
-            const basemapControl = createControlButton({
-                id: "basemap",
-                title: "Bản đồ nền",
-                icon: "layers",
-                offcanvasTitle: "Chọn bản đồ nền",
-            });
-
-            // Khởi tạo BasemapGallery trong offcanvas content
-            const basemapGallery = new BasemapGallery({
-                view: _view,
-                container: basemapControl.contentContainer,
-            });
-
-            // Tạo button và offcanvas cho WMS
-            const wmsControl = createControlButton({
-                id: "wms",
-                title: "Lớp WMS",
-                icon: "map",
-                offcanvasTitle: "Lớp bản đồ WMS",
-            });
-
-            // Thêm sketch control với tham chiếu đến sketch widget
-            const sketchControl = createControlButton({
-                id: "sketch",
-                title: "Công cụ vẽ",
-                icon: "pencil",
-                buttonClass: "sketch-tool-btn",
-                onClick: (button) => {
-                    if (sketch.visible) {
-                        sketch.visible = false;
-                        button.classList.remove("active");
-                        button.innerHTML = '<span class="bi bi-pencil"></span>';
-                    } else {
-                        sketch.visible = true;
-                        button.classList.add("active");
-                        button.innerHTML =
-                            '<span class="bi bi-pencil-fill"></span>';
-                    }
-                },
-            });
+            this.sketch.visible = false;
+            view.ui.add(this.sketch, "top-right");
 
             // Handle sketch events
-            sketch.on(["create", "update"], (event) => {
+            this.sketch.on(["create", "update"], (event) => {
                 if (event.state === "complete") {
                     const graphic = event.graphic;
                     if (graphic) {
-                        // Đặt graphic nằm trên mặt đất
                         graphic.elevationInfo = {
                             mode: "on-the-ground",
                         };
                     }
                 }
             });
+        }.bind(this));
+    },
 
-            // Khởi tạo danh sách WMS trong offcanvas content
-            initializeWMSList(wmsControl.contentContainer);
+    toggle: function () {
+        if (this.sketch) {
+            this.sketch.visible = !this.sketch.visible;
+            return this.sketch.visible;
+        }
+        return false;
+    },
+
+    isVisible: function () {
+        return this.sketch ? this.sketch.visible : false;
+    },
+};
+
+const ControlManager = {
+    createControlButton: function ({
+        id,
+        title,
+        icon,
+        offcanvasTitle,
+        offcanvasContent = "",
+        buttonClass = "",
+        onClick,
+    }) {
+        const container = document.querySelector(
+            ".esri-component.esri-navigation-toggle.esri-widget"
+        );
+
+        const button = document.createElement("button");
+
+        // Base classes cho tất cả buttons
+        const baseClasses = [
+            "border-0",
+            "esri-widget--button",
+            "esri-widget",
+            "esri-interactive",
+        ];
+        if (buttonClass) {
+            baseClasses.push(buttonClass);
+        }
+        button.className = baseClasses.join(" ");
+
+        // Style chung
+        button.setAttribute(
+            "style",
+            "border-top: solid 1px rgba(110, 110, 110, .3) !important;"
+        );
+        button.setAttribute("type", "button");
+        button.setAttribute("title", title);
+
+        // QUAN TRỌNG: Chỉ thêm data attributes cho offcanvas buttons
+        if (!onClick) {
+            button.setAttribute("data-bs-toggle", "offcanvas");
+            button.setAttribute("data-bs-target", `#${id}Offcanvas`);
+        }
+
+        // Icon và content
+        button.innerHTML = `<span class="bi bi-${icon}"></span>`;
+
+        // Thêm onclick event nếu có
+        if (onClick) {
+            button.onclick = () => onClick(button);
+        }
+
+        container.appendChild(button);
+
+        // Chỉ tạo offcanvas cho buttons không có onClick
+        let offcanvas = null;
+        if (!onClick && (offcanvasTitle || offcanvasContent)) {
+            offcanvas = this.createOffCanvas(
+                id,
+                offcanvasTitle,
+                offcanvasContent
+            );
+        }
+
+        return {
+            button,
+            offcanvas,
+            contentContainer: offcanvas
+                ? offcanvas.querySelector(`#${id}Content`)
+                : null,
+        };
+    },
+
+    createOffCanvas: function (id = "", title = "", content = "") {
+        const offcanvas = document.createElement("div");
+        offcanvas.className = "offcanvas offcanvas-end";
+        offcanvas.id = `${id}Offcanvas`;
+        offcanvas.innerHTML = `
+            <div class="offcanvas-header">
+                <h5 class="offcanvas-title">${title}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+            </div>
+            <div class="offcanvas-body" id="${id}Content">
+                ${content || ""}
+            </div>
+        `;
+        document.body.appendChild(offcanvas);
+        return offcanvas;
+    },
+
+    initializeControls: function (view) {
+        // Basemap control
+        const basemapControl = this.createControlButton({
+            id: "basemap",
+            title: "Bản đồ nền",
+            icon: "layers",
+            offcanvasTitle: "Chọn bản đồ nền",
+        });
+
+        // Khởi tạo BasemapGallery
+        require(["esri/widgets/BasemapGallery"], function (BasemapGallery) {
+            new BasemapGallery({
+                view: view,
+                container: basemapControl.contentContainer,
+            });
+        });
+
+        // WMS control
+        const wmsControl = this.createControlButton({
+            id: "wms",
+            title: "Lớp WMS",
+            icon: "map",
+            offcanvasTitle: "Lớp bản đồ WMS",
+        });
+
+        // Sketch control
+        this.createControlButton({
+            id: "sketch",
+            title: "Công cụ vẽ",
+            icon: "pencil",
+            buttonClass: "sketch-tool-btn",
+            onClick: (button) => {
+                const isVisible = SketchManager.toggle();
+                if (isVisible) {
+                    button.classList.add("active");
+                    button.innerHTML =
+                        '<span class="bi bi-pencil-fill"></span>';
+                } else {
+                    button.classList.remove("active");
+                    button.innerHTML = '<span class="bi bi-pencil"></span>';
+                }
+            },
+        });
+
+        // Khởi tạo WMS list
+        WMSLayerManager.initializeWMSList(wmsControl.contentContainer);
+    },
+};
+
+// Cập nhật hàm toggle WMS layer
+window.toggleWMSLayer = function (wmsId, button) {
+    const wmsConfig = WMS_LAYERS.find((config) => config.id === wmsId);
+    if (!wmsConfig) return;
+
+    button.disabled = true;
+
+    if (_wmsLayers.has(wmsId)) {
+        WMSLayerManager.removeWMSLayer(wmsId);
+        button.classList.remove("active");
+        button.innerHTML = '<i class="bi bi-eye"></i>';
+        button.disabled = false;
+    } else {
+        button.innerHTML = '<i class="bi bi-hourglass-split"></i>';
+
+        WMSLayerManager.createAndAddWMSLayer(wmsConfig)
+            .then(() => {
+                button.classList.add("active");
+                button.innerHTML = '<i class="bi bi-eye-slash"></i>';
+
+                const visibleLayers = Array.from(_wmsLayers.keys())
+                    .map((id) => WMS_LAYERS.find((config) => config.id === id))
+                    .sort((a, b) => a.zoomPriority - b.zoomPriority);
+
+                if (visibleLayers[0].id === wmsId) {
+                    WMSLayerManager.zoomToWMSExtent(
+                        wmsConfig.url,
+                        wmsConfig.layer.split(":")[1]
+                    );
+                }
+            })
+            .catch((error) => {
+                console.error("Error toggling WMS layer:", error);
+                button.innerHTML = '<i class="bi bi-eye"></i>';
+            })
+            .finally(() => {
+                button.disabled = false;
+            });
+    }
+};
+
+// Cập nhật hàm initMap3D
+function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
+    require(["esri/Map", "esri/views/SceneView", "esri/config"], function (
+        Map,
+        SceneView,
+        esriConfig
+    ) {
+        WMSLayerManager.setupCORS(esriConfig);
+
+        _map = new Map({
+            basemap: "dark-gray-vector",
+            ground: "world-elevation",
+        });
+
+        _view = new SceneView({
+            container: containerId,
+            map: _map,
+            camera: {
+                position: {
+                    longitude: center[0],
+                    latitude: center[1],
+                    z: 40000000,
+                },
+                tilt: 0,
+                heading: 0,
+            },
+            qualityProfile: "high",
+        });
+
+        _view.when(() => {
+            console.log("View loaded at:", new Date().toISOString());
+
+            // Khởi tạo các managers
+            SketchManager.initialize(_view);
+            ControlManager.initializeControls(_view);
             WMSLayerManager.loadDefaultWMSLayers();
         });
 
@@ -940,255 +1202,12 @@ function initMap3D(containerId, center = [105.85, 21.0245], targetZoom = 12) {
         });
 
         _view.on("click", (event) => {
-            WMSLayerManager.handleMapClick(event);
+            // Chỉ xử lý click khi không ở chế độ vẽ
+            if (!SketchManager.isVisible()) {
+                WMSLayerManager.handleMapClick(event);
+            }
         });
     });
-}
-
-// Hàm tạo button và offcanvas
-function createControlButton({
-    id,
-    title,
-    icon,
-    offcanvasTitle,
-    offcanvasContent = "",
-    buttonClass = "",
-    onClick,
-}) {
-    const container = document.querySelector(
-        ".esri-component.esri-navigation-toggle.esri-widget"
-    );
-
-    const button = document.createElement("button");
-
-    // Base classes cho tất cả buttons
-    const baseClasses = [
-        "border-0",
-        "esri-widget--button",
-        "esri-widget",
-        "esri-interactive",
-    ];
-    if (buttonClass) {
-        baseClasses.push(buttonClass);
-    }
-    button.className = baseClasses.join(" ");
-
-    // Style chung
-    button.setAttribute(
-        "style",
-        "border-top: solid 1px rgba(110, 110, 110, .3) !important;"
-    );
-    button.setAttribute("type", "button");
-    button.setAttribute("title", title);
-
-    // QUAN TRỌNG: Chỉ thêm data attributes cho offcanvas buttons
-    if (!onClick) {
-        button.setAttribute("data-bs-toggle", "offcanvas");
-        button.setAttribute("data-bs-target", `#${id}Offcanvas`);
-    }
-
-    // Icon và content
-    button.innerHTML = `<span class="bi bi-${icon}"></span>`;
-
-    // Thêm onclick event nếu có
-    if (onClick) {
-        button.onclick = () => onClick(button);
-    }
-
-    container.appendChild(button);
-
-    // Chỉ tạo offcanvas cho buttons không có onClick
-    let offcanvas = null;
-    if (!onClick && (offcanvasTitle || offcanvasContent)) {
-        offcanvas = createOffCanvasForControlButton(
-            id,
-            offcanvasTitle,
-            offcanvasContent
-        );
-    }
-
-    return {
-        button,
-        offcanvas,
-        contentContainer: offcanvas
-            ? offcanvas.querySelector(`#${id}Content`)
-            : null,
-    };
-}
-
-function createOffCanvasForControlButton(id = "", title = "", content = "") {
-    const offcanvas = document.createElement("div");
-    offcanvas.className = "offcanvas offcanvas-end";
-    offcanvas.id = `${id}Offcanvas`;
-    offcanvas.innerHTML = `
-        <div class="offcanvas-header">
-            <h5 class="offcanvas-title">${title}</h5>
-            <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
-        </div>
-        <div class="offcanvas-body" id="${id}Content">
-            ${content || ""}
-        </div>
-    `;
-    document.body.appendChild(offcanvas);
-    return offcanvas;
-}
-
-function setupCORS(esriConfig) {
-    if (esriConfig.request) {
-        if (!esriConfig.request.corsEnabledServers) {
-            esriConfig.request.corsEnabledServers = [];
-        }
-        // Thêm tất cả các server cần thiết
-        esriConfig.request.corsEnabledServers.push(
-            "bando.ifee.edu.vn",
-            "maps-150.ifee.edu.vn"
-        );
-    }
-}
-
-function zoomToWMSExtent(wmsUrl, layerName) {
-    console.log("Starting zoomToWMSExtent with:", { wmsUrl, layerName });
-    const capsURL = `${wmsUrl}?SERVICE=WMS&REQUEST=GetCapabilities&VERSION=1.3.0`;
-
-    fetch(capsURL)
-        .then((response) => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.text();
-        })
-        .then((text) => {
-            const parser = new DOMParser();
-            const xmlDoc = parser.parseFromString(text, "text/xml");
-            const layers = xmlDoc.getElementsByTagName("Layer");
-
-            console.log("Found layers:", layers.length);
-
-            for (let layer of layers) {
-                const nameElement = layer.getElementsByTagName("Name")[0];
-                if (nameElement) {
-                    const layerFullName = nameElement.textContent;
-                    console.log("Checking layer:", {
-                        layerFullName,
-                        searchingFor: layerName,
-                        matches: layerFullName.includes(layerName),
-                    });
-
-                    if (layerFullName.includes(layerName)) {
-                        const bboxElement =
-                            layer.getElementsByTagName("BoundingBox")[0];
-                        if (bboxElement) {
-                            console.log(
-                                "Found matching layer with BoundingBox:",
-                                {
-                                    minx: bboxElement.getAttribute("minx"),
-                                    miny: bboxElement.getAttribute("miny"),
-                                    maxx: bboxElement.getAttribute("maxx"),
-                                    maxy: bboxElement.getAttribute("maxy"),
-                                }
-                            );
-
-                            require(["esri/geometry/Extent"], function (
-                                Extent
-                            ) {
-                                const extent = new Extent({
-                                    xmin: parseFloat(
-                                        bboxElement.getAttribute("minx")
-                                    ),
-                                    ymin: parseFloat(
-                                        bboxElement.getAttribute("miny")
-                                    ),
-                                    xmax: parseFloat(
-                                        bboxElement.getAttribute("maxx")
-                                    ),
-                                    ymax: parseFloat(
-                                        bboxElement.getAttribute("maxy")
-                                    ),
-                                    spatialReference: { wkid: 4326 },
-                                });
-
-                                console.log("Created extent:", extent);
-
-                                setTimeout(() => {
-                                    _view
-                                        .goTo(
-                                            {
-                                                target: extent.expand(1.2),
-                                                tilt: 0,
-                                                heading: 0,
-                                                position: {
-                                                    z: 800000,
-                                                },
-                                            },
-                                            {
-                                                duration: 5000,
-                                                easing: "out-quad",
-                                            }
-                                        )
-                                        .then(() => {
-                                            console.log(
-                                                "Zoom completed successfully"
-                                            );
-                                        })
-                                        .catch((error) => {
-                                            console.error(
-                                                "Zoom failed:",
-                                                error
-                                            );
-                                        });
-                                }, 2000);
-                            });
-                            return;
-                        } else {
-                            console.log(
-                                "No BoundingBox found for matching layer"
-                            );
-                        }
-                    }
-                }
-            }
-            console.log("No matching layer found");
-        })
-        .catch((error) =>
-            console.error("Error getting WMS capabilities:", error)
-        );
-}
-
-function initializeWMSList(container = document.getElementById("wmsListDiv")) {
-    if (!container) return;
-
-    container.innerHTML = "";
-    const wmsListElement = document.createElement("ul");
-    wmsListElement.className = "wms-list";
-    wmsListElement.style.cssText = `
-        list-style: none;
-        padding: 0;
-        margin: 0;
-    `;
-
-    WMS_LAYERS.forEach((wmsConfig) => {
-        const listItem = document.createElement("li");
-        listItem.className = "wms-item";
-        listItem.style.cssText = `
-            padding: 10px;
-            border-bottom: 1px solid #dee2e6;
-            margin-bottom: 5px;
-        `;
-
-        listItem.innerHTML = `
-            <div class="d-flex justify-content-between align-items-center">
-                <span>${wmsConfig.name}</span>
-                <button class="btn btn-sm btn-outline-primary toggle-wms" 
-                        data-wms-id="${wmsConfig.id}"
-                        onclick="toggleWMSLayer('${wmsConfig.id}', this)">
-                    <i class="bi bi-eye"></i>
-                </button>
-            </div>
-        `;
-        wmsListElement.appendChild(listItem);
-    });
-
-    container.appendChild(wmsListElement);
 }
 
 window.initMap3D = initMap3D;
