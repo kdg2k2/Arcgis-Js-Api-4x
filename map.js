@@ -891,91 +891,174 @@ const WMSLayerManager = {
 const SketchManager = {
     sketch: null,
     sketchLayer: null,
+    mergeButton: null,
 
-    initialize: function (view) {
-        require(["esri/layers/GraphicsLayer", "esri/widgets/Sketch"], function (
-            GraphicsLayer,
-            Sketch
-        ) {
-            // Tạo graphics layer cho sketch
+    // Các symbols cho graphics với mode: on-the-ground
+    fillSymbol: {
+        type: "simple-fill",
+        color: [227, 139, 79, 0.8],
+        outline: {
+            color: [255, 255, 255],
+            width: 1
+        }
+    },
+
+    mergeSymbol: {
+        type: "simple-fill",
+        color: [227, 139, 255],
+        outline: {
+            color: [255, 255, 255],
+            width: 1
+        }
+    },
+
+    initialize: function(view) {
+        require([
+            "esri/layers/GraphicsLayer",
+            "esri/widgets/Sketch",
+            "esri/geometry/geometryEngine",
+            "esri/Graphic",
+            "esri/geometry/support/webMercatorUtils"
+        ], function(GraphicsLayer, Sketch, geometryEngine, Graphic, webMercatorUtils) {
+            // Tạo graphics layer với mode on-the-ground
             this.sketchLayer = new GraphicsLayer({
                 id: "sketchLayer",
                 title: "Sketch Layer",
                 elevationInfo: {
-                    mode: "on-the-ground",
-                },
+                    mode: "on-the-ground"  // Fix graphics trên mặt đất
+                }
             });
 
-            // Thêm layer vào map
             view.map.add(this.sketchLayer);
 
-            // Tạo sketch widget
+            // Tạo merge button
+            this.mergeButton = document.createElement("button");
+            this.mergeButton.className = "esri-widget esri-widget--button esri-interactive merge-button";
+            this.mergeButton.title = "Merge selected polygons";
+            this.mergeButton.innerHTML = `
+                <span class="esri-icon-combine" aria-hidden="true"></span>
+                <span class="esri-icon-font-fallback-text">Merge</span>
+            `;
+            this.mergeButton.style.display = "none";
+            this.mergeButton.onclick = () => {
+                const updatedGeometry = [];
+                this.sketchLayer.graphics.forEach(graphic => {
+                    if (graphic.geometry.spatialReference.wkid === 4326) {
+                        updatedGeometry.push(
+                            webMercatorUtils.geographicToWebMercator(
+                                graphic.geometry.clone()
+                            )
+                        );
+                    } else {
+                        updatedGeometry.push(graphic.geometry.clone());
+                    }
+                });
+
+                const joinedPolygon = geometryEngine.union(updatedGeometry);
+                this.sketchLayer.removeAll();
+                
+                const resultGraphic = new Graphic({
+                    geometry: joinedPolygon,
+                    symbol: this.mergeSymbol,
+                    // Fix graphic trên mặt đất
+                    elevationInfo: {
+                        mode: "on-the-ground"
+                    }
+                });
+                
+                this.sketchLayer.add(resultGraphic);
+                this.mergeButton.style.display = "none";
+            };
+
+            // Tạo sketch widget với các tùy chọn để disable độ cao
             this.sketch = new Sketch({
                 view: view,
                 layer: this.sketchLayer,
                 creationMode: "update",
                 availableCreateTools: ["polygon"],
+                defaultCreateOptions: {
+                    mode: "click",
+                    // Disable các tùy chọn liên quan đến độ cao
+                    elevationOptions: {
+                        enabled: false
+                    }
+                },
+                defaultUpdateOptions: {
+                    tool: "reshape",
+                    multipleSelectionEnabled: true,
+                    // Disable các tùy chọn liên quan đến độ cao
+                    enableZ: false,
+                    enableVerticalEditing: false,
+                    toggleToolOnClick: false
+                },
                 visibleElements: {
                     createTools: {
                         point: false,
                         polyline: false,
+                        polygon: true
                     },
                     selectionTools: {
-                        "lasso-selection": false,
-                        "rectangle-selection": false,
+                        "lasso-selection": true,
+                        "rectangle-selection": true
                     },
-                    settingsMenu: false,
+                    settingsMenu: false,  // Ẩn menu settings để tránh các tùy chọn độ cao
                     undoRedoMenu: true,
-                },
-                defaultCreateOptions: {
-                    mode: "click",
-                },
-                snappingOptions: {
-                    enabled: true,
-                    selfEnabled: true,
-                    featureEnabled: true,
-                },
-                labelOptions: {
-                    enabled: true,
-                    labelExpressionInfo: {
-                        expression:
-                            "Text($feature.SHAPE_Area, '#,##0.00') + ' m²'",
-                    },
-                },
-                tooltipOptions: {
-                    enabled: true,
-                },
+                    // Ẩn các tools liên quan đến độ cao
+                    elevationInfo: false,
+                    z: false
+                }
             });
 
-            // Thêm sketch widget vào view (mặc định ẩn)
-            this.sketch.visible = false;
+            // Thêm widgets vào view
             view.ui.add(this.sketch, "top-right");
+            view.ui.add(this.mergeButton, "top-right");
 
-            // Handle sketch events
+            // Handle sketch events - đảm bảo mọi graphic đều ở mặt đất
             this.sketch.on(["create", "update"], (event) => {
                 if (event.state === "complete") {
                     const graphic = event.graphic;
                     if (graphic) {
+                        graphic.symbol = this.fillSymbol;
+                        // Fix graphic trên mặt đất
                         graphic.elevationInfo = {
-                            mode: "on-the-ground",
+                            mode: "on-the-ground"
                         };
                     }
                 }
             });
+
+            // Handle selection changes
+            this.sketch.on("update", (event) => {
+                if (event.state === "start" || event.state === "active") {
+                    const graphicsCount = this.sketchLayer.graphics.length;
+                    this.mergeButton.style.display = graphicsCount > 1 ? "block" : "none";
+                }
+                if (event.state === "complete") {
+                    const graphicsCount = this.sketchLayer.graphics.length;
+                    this.mergeButton.style.display = graphicsCount > 1 ? "block" : "none";
+                }
+            });
+
         }.bind(this));
     },
 
-    toggle: function () {
+    toggle: function() {
         if (this.sketch) {
             this.sketch.visible = !this.sketch.visible;
+            if (!this.sketch.visible) {
+                this.mergeButton.style.display = "none";
+            } else {
+                const graphicsCount = this.sketchLayer.graphics.length;
+                this.mergeButton.style.display = graphicsCount > 1 ? "block" : "none";
+            }
             return this.sketch.visible;
         }
         return false;
     },
 
-    isVisible: function () {
+    isVisible: function() {
         return this.sketch ? this.sketch.visible : false;
-    },
+    }
 };
 
 const ControlManager = {
