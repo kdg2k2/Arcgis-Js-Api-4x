@@ -29,8 +29,17 @@ const WMS_LAYERS = [
         url: "https://maps-151.ifee.edu.vn:8453/geoserver/NgheAnPfes/wms",
         layer: "NgheAnPfes:htr",
         version: "1.1.1",
-        defaultVisible: true,
-        zoomPriority: 1,
+        defaultVisible: false,
+        zoomPriority: 8,
+    },
+    {
+        id: "wms_4",
+        name: "Bản đồ EUDR 2025",
+        url: "https://maps-150.ifee.edu.vn:8453/geoserver/_2025_EUDR/wms",
+        layer: "_2025_EUDR:gardens",
+        version: "1.1.1",
+        defaultVisible: false,
+        zoomPriority: 8,
     },
 ];
 
@@ -246,7 +255,7 @@ const WMSLayerManager = {
                     X: pixelX,
                     Y: pixelY,
                     TRANSPARENT: "true",
-                    ...(cqlFilter && { CQL_FILTER: cqlFilter })
+                    ...(cqlFilter && { CQL_FILTER: cqlFilter }),
                 });
 
                 const getFeatureInfoUrl = `${url.origin}${
@@ -298,6 +307,7 @@ const WMSLayerManager = {
 
                             // Parse JSON response
                             const response = JSON.parse(responseText);
+
                             resolve({
                                 layerId: wmsConfig.id,
                                 layerName: wmsConfig.name,
@@ -536,6 +546,29 @@ const WMSLayerManager = {
                 highestPriorityLayer.config
             );
 
+            if (result.data && result.data[0]) {
+                const props = result.data[0].properties;
+                // Giả sử bạn muốn dùng trường 'tt' (nhưng thực tế là 'TT')
+                const ttField = this.findFieldCaseInsensitive(props, "tt");
+                console.log({ props, ttField }); // Xem để chắc chắn
+
+                if (ttField && props[ttField] !== undefined) {
+                    // Nếu trường kiểu chuỗi
+                    let highlightCql =
+                        typeof props[ttField] === "string"
+                            ? `${ttField}='${props[ttField]}'`
+                            : `${ttField}=${props[ttField]}`;
+                    await this.highlightSelectedFeatureArcgis(
+                        highestPriorityLayer.config,
+                        highlightCql
+                    );
+                } else {
+                    console.warn(
+                        "[Highlight] Không tìm thấy trường định danh TT/tt trên feature!"
+                    );
+                }
+            }
+
             if (!result.data || result.data.length === 0) {
                 _view.popup.content =
                     "Không tìm thấy thông tin tại vị trí này.";
@@ -575,6 +608,125 @@ const WMSLayerManager = {
         } catch (error) {
             console.error("Error in handleMapClick:", error);
             _view.popup.content = "Có lỗi xảy ra khi truy vấn thông tin.";
+        }
+    },
+
+    findFieldCaseInsensitive(props, searchField) {
+        return Object.keys(props).find(
+            (k) => k.toLowerCase() === searchField.toLowerCase()
+        );
+    },
+
+    highlightPolygonOnMap: function (
+        view,
+        geojson,
+        layerId = "highlightLotLayer"
+    ) {
+        require([
+            "esri/geometry/Polygon",
+            "esri/Graphic",
+            "esri/layers/GraphicsLayer",
+            "esri/Color",
+        ], function (Polygon, Graphic, GraphicsLayer, Color) {
+            // Xóa layer cũ nếu có
+            let oldLayer = view.map.findLayerById(layerId);
+            if (oldLayer) {
+                view.map.remove(oldLayer);
+            }
+            // Tạo layer mới
+            let highlightLayer = new GraphicsLayer({ id: layerId });
+
+            geojson.features.forEach((f) => {
+                let geom = f.geometry;
+                if (geom.type === "Polygon" || geom.type === "MultiPolygon") {
+                    // Chuẩn hóa rings
+                    let rings =
+                        geom.type === "Polygon"
+                            ? geom.coordinates
+                            : geom.coordinates.flat();
+                    let polygon = new Polygon({
+                        rings: rings,
+                        spatialReference: { wkid: 4326 },
+                    });
+                    let graphic = new Graphic({
+                        geometry: polygon,
+                        symbol: {
+                            type: "simple-fill",
+                            color: [255, 247, 188, 0.2],
+                            outline: {
+                                color: [255, 255, 134, 1],
+                                width: 2,
+                            },
+                        },
+                    });
+                    highlightLayer.add(graphic);
+                }
+            });
+
+            view.map.add(highlightLayer);
+        });
+    },
+
+    // Hàm fetch GeoJSON feature theo CQL filter (qua WFS)
+    fetchFeatureGeoJSON: async function (
+        wfsUrl,
+        typeName,
+        cqlFilter,
+        maxFeatures = 1
+    ) {
+        // Build WFS GetFeature URL
+        let params = new URLSearchParams({
+            service: "WFS",
+            version: "1.1.0",
+            request: "GetFeature",
+            typeName: typeName,
+            outputFormat: "application/json",
+            srsName: "EPSG:4326",
+            maxFeatures: maxFeatures,
+        });
+        if (cqlFilter) params.append("CQL_FILTER", cqlFilter);
+
+        let fullUrl = `${wfsUrl}?${params.toString()}`;
+        let response = await fetch(fullUrl);
+        let text = await response.text();
+
+        // Kiểm tra nếu là XML (GeoServer trả lỗi/lỗi truy vấn)
+        if (text.trim().startsWith("<")) {
+            // Có thể log ra hoặc parse lấy lỗi
+            console.error("WFS response is XML (likely an error):", text);
+            throw new Error("WFS server returned error or no feature: " + text);
+        }
+        // Nếu là JSON thì parse tiếp
+        try {
+            return JSON.parse(text);
+        } catch (e) {
+            console.error("Failed to parse WFS JSON:", text);
+            throw e;
+        }
+    },
+
+    // Hàm sinh WFS url từ WMS url nếu cần
+    generateWFSUrl: function (wmsUrl) {
+        // Thay thế phần /wms bằng /wfs (cách phổ biến trên Geoserver)
+        return wmsUrl.replace(/\/wms(\?.*)?$/, "/wfs");
+    },
+
+    // Hàm highlight feature theo kết quả truy vấn
+    highlightSelectedFeatureArcgis: async function (wmsConfig, cqlFilter) {
+        try {
+            const wfsUrl =
+                wmsConfig.wfsUrl || this.generateWFSUrl(wmsConfig.url);
+            let geojson = await this.fetchFeatureGeoJSON(
+                wfsUrl,
+                wmsConfig.layer, // hoặc .layers tùy cấu hình
+                cqlFilter,
+                100
+            );
+            if (!geojson || !geojson.features || geojson.features.length === 0)
+                return;
+            this.highlightPolygonOnMap(_view, geojson, "highlightLotLayer");
+        } catch (err) {
+            console.error("Highlight feature error:", err);
         }
     },
 };
