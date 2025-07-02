@@ -893,7 +893,6 @@ const SketchManager = {
     sketchLayer: null,
     mergeButton: null,
 
-    // Các symbols cho graphics với mode: on-the-ground
     fillSymbol: {
         type: "simple-fill",
         color: [227, 139, 79, 0.8],
@@ -920,57 +919,19 @@ const SketchManager = {
             "esri/Graphic",
             "esri/geometry/support/webMercatorUtils"
         ], function(GraphicsLayer, Sketch, geometryEngine, Graphic, webMercatorUtils) {
-            // Tạo graphics layer với mode on-the-ground
+            // Tạo graphics layer
             this.sketchLayer = new GraphicsLayer({
                 id: "sketchLayer",
                 title: "Sketch Layer",
                 elevationInfo: {
-                    mode: "on-the-ground"  // Fix graphics trên mặt đất
-                }
+                    mode: "on-the-ground"
+                },
+                visible: false
             });
 
             view.map.add(this.sketchLayer);
 
-            // Tạo merge button
-            this.mergeButton = document.createElement("button");
-            this.mergeButton.className = "esri-widget esri-widget--button esri-interactive merge-button";
-            this.mergeButton.title = "Merge selected polygons";
-            this.mergeButton.innerHTML = `
-                <span class="esri-icon-combine" aria-hidden="true"></span>
-                <span class="esri-icon-font-fallback-text">Merge</span>
-            `;
-            this.mergeButton.style.display = "none";
-            this.mergeButton.onclick = () => {
-                const updatedGeometry = [];
-                this.sketchLayer.graphics.forEach(graphic => {
-                    if (graphic.geometry.spatialReference.wkid === 4326) {
-                        updatedGeometry.push(
-                            webMercatorUtils.geographicToWebMercator(
-                                graphic.geometry.clone()
-                            )
-                        );
-                    } else {
-                        updatedGeometry.push(graphic.geometry.clone());
-                    }
-                });
-
-                const joinedPolygon = geometryEngine.union(updatedGeometry);
-                this.sketchLayer.removeAll();
-                
-                const resultGraphic = new Graphic({
-                    geometry: joinedPolygon,
-                    symbol: this.mergeSymbol,
-                    // Fix graphic trên mặt đất
-                    elevationInfo: {
-                        mode: "on-the-ground"
-                    }
-                });
-                
-                this.sketchLayer.add(resultGraphic);
-                this.mergeButton.style.display = "none";
-            };
-
-            // Tạo sketch widget với các tùy chọn để disable độ cao
+            // Tạo sketch widget
             this.sketch = new Sketch({
                 view: view,
                 layer: this.sketchLayer,
@@ -978,7 +939,6 @@ const SketchManager = {
                 availableCreateTools: ["polygon"],
                 defaultCreateOptions: {
                     mode: "click",
-                    // Disable các tùy chọn liên quan đến độ cao
                     elevationOptions: {
                         enabled: false
                     }
@@ -986,7 +946,6 @@ const SketchManager = {
                 defaultUpdateOptions: {
                     tool: "reshape",
                     multipleSelectionEnabled: true,
-                    // Disable các tùy chọn liên quan đến độ cao
                     enableZ: false,
                     enableVerticalEditing: false,
                     toggleToolOnClick: false
@@ -1001,25 +960,93 @@ const SketchManager = {
                         "lasso-selection": true,
                         "rectangle-selection": true
                     },
-                    settingsMenu: false,  // Ẩn menu settings để tránh các tùy chọn độ cao
+                    settingsMenu: false,
                     undoRedoMenu: true,
-                    // Ẩn các tools liên quan đến độ cao
                     elevationInfo: false,
                     z: false
-                }
+                },
+                visible: false
             });
 
-            // Thêm widgets vào view
+             // Tạo merge button
+            this.mergeButton = document.createElement("button");
+            this.mergeButton.className = "esri-widget esri-widget--button esri-interactive merge-button";
+            this.mergeButton.title = "Merge selected polygons";
+            this.mergeButton.innerHTML = `
+                <span class="esri-icon-combine" aria-hidden="true"></span>
+                <span class="esri-icon-font-fallback-text">Merge</span>
+            `;
+            this.mergeButton.style.display = "none";
+
+            // Xử lý merge
+            this.mergeButton.onclick = () => {
+                const selectedGraphics = this.sketch.updateGraphics;
+                if (!selectedGraphics || selectedGraphics.length < 2) return;
+
+                try {
+                    const updatedGeometry = [];
+                    selectedGraphics.forEach(graphic => {
+                        if (!graphic || !graphic.geometry) return;
+
+                        if (graphic.geometry.spatialReference.wkid === 4326) {
+                            updatedGeometry.push(
+                                webMercatorUtils.geographicToWebMercator(
+                                    graphic.geometry.clone()
+                                )
+                            );
+                        } else {
+                            updatedGeometry.push(graphic.geometry.clone());
+                        }
+                    });
+
+                    if (updatedGeometry.length < 2) return;
+
+                    const joinedPolygon = geometryEngine.union(updatedGeometry);
+                    if (!joinedPolygon) return;
+
+                    selectedGraphics.forEach(graphic => {
+                        if (graphic) this.sketchLayer.remove(graphic);
+                    });
+
+                    const resultGraphic = new Graphic({
+                        geometry: joinedPolygon,
+                        symbol: this.mergeSymbol,
+                        elevationInfo: {
+                            mode: "on-the-ground"
+                        },
+                        attributes: {
+                            creator: 'clonemail2k2',
+                            createdAt: new Date().toISOString()
+                        }
+                    });
+
+                    this.sketchLayer.add(resultGraphic);
+                    if (this.sketch.updateGraphics) {
+                        this.sketch.updateGraphics.removeAll();
+                    }
+                } catch (error) {
+                    console.error("Error during merge:", error);
+                }
+            };
+
+            // Thêm widgets
             view.ui.add(this.sketch, "top-right");
             view.ui.add(this.mergeButton, "top-right");
 
-            // Handle sketch events - đảm bảo mọi graphic đều ở mặt đất
-            this.sketch.on(["create", "update"], (event) => {
+            // Hàm cập nhật visibility của merge button
+           const updateMergeButtonVisibility = (event) => {
+                console.log("Update event:", event);
+                const graphics = event && event.graphics ? event.graphics : this.sketch.updateGraphics;
+                const count = graphics ? graphics.length : 0;
+                this.mergeButton.style.display = count > 1 ? "block" : "none";
+            };
+
+            // Handle sketch events
+            this.sketch.on("create", (event) => {
                 if (event.state === "complete") {
                     const graphic = event.graphic;
                     if (graphic) {
                         graphic.symbol = this.fillSymbol;
-                        // Fix graphic trên mặt đất
                         graphic.elevationInfo = {
                             mode: "on-the-ground"
                         };
@@ -1027,15 +1054,12 @@ const SketchManager = {
                 }
             });
 
-            // Handle selection changes
+            // Theo dõi update event để cập nhật button merge
             this.sketch.on("update", (event) => {
-                if (event.state === "start" || event.state === "active") {
-                    const graphicsCount = this.sketchLayer.graphics.length;
-                    this.mergeButton.style.display = graphicsCount > 1 ? "block" : "none";
-                }
+                updateMergeButtonVisibility(event);
+                
                 if (event.state === "complete") {
-                    const graphicsCount = this.sketchLayer.graphics.length;
-                    this.mergeButton.style.display = graphicsCount > 1 ? "block" : "none";
+                    this.mergeButton.style.display = "none";
                 }
             });
 
@@ -1043,17 +1067,20 @@ const SketchManager = {
     },
 
     toggle: function() {
-        if (this.sketch) {
-            this.sketch.visible = !this.sketch.visible;
-            if (!this.sketch.visible) {
-                this.mergeButton.style.display = "none";
-            } else {
-                const graphicsCount = this.sketchLayer.graphics.length;
-                this.mergeButton.style.display = graphicsCount > 1 ? "block" : "none";
-            }
-            return this.sketch.visible;
+        if (!this.sketch) return false;
+
+        this.sketch.visible = !this.sketch.visible;
+        if (this.sketchLayer) {
+            this.sketchLayer.visible = this.sketch.visible;
         }
-        return false;
+        
+        if (!this.sketch.visible) {
+            if (this.mergeButton) {
+                this.mergeButton.style.display = "none";
+            }
+        }
+
+        return this.sketch.visible;
     },
 
     isVisible: function() {
