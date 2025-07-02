@@ -35,33 +35,24 @@ const DEFAULT_WMS_LAYERS = [
         defaultVisible: true,
         zoomPriority: 10,
     },
-    // {
-    //     id: "wms_2",
-    //     name: "Bản đồ hiện trạng rừng Cúc Phương",
-    //     url: "https://maps-150.ifee.edu.vn:8453/geoserver/ws_6VQG/wms",
-    //     layer: "ws_6VQG:htr_cucphuong",
-    //     version: "1.1.1",
-    //     defaultVisible: false,
-    //     zoomPriority: 9,
-    // },
-    // {
-    //     id: "wms_3",
-    //     name: "Bản đồ hiện trạng rừng Nghệ An",
-    //     url: "https://maps-151.ifee.edu.vn:8453/geoserver/NgheAnPfes/wms",
-    //     layer: "NgheAnPfes:htr",
-    //     version: "1.1.1",
-    //     defaultVisible: false,
-    //     zoomPriority: 8,
-    // },
-    // {
-    //     id: "wms_4",
-    //     name: "Bản đồ EUDR 2025",
-    //     url: "https://maps-150.ifee.edu.vn:8453/geoserver/_2025_EUDR/wms",
-    //     layer: "_2025_EUDR:gardens",
-    //     version: "1.1.1",
-    //     defaultVisible: false,
-    //     zoomPriority: 8,
-    // },
+    {
+        id: "wms_2",
+        name: "Ranh giới xã",
+        url: "https://bando.ifee.edu.vn:8453/geoserver/ws_ranhgioi/wms",
+        layer: "ws_ranhgioi:rg_vn_xa",
+        version: "1.1.1",
+        defaultVisible: false,
+        zoomPriority: 9,
+    },
+    {
+        id: "wms_3",
+        name: "Bản đồ EUDR 2025",
+        url: "https://maps-150.ifee.edu.vn:8453/geoserver/_2025_EUDR/wms",
+        layer: "_2025_EUDR:gardens",
+        version: "1.1.1",
+        defaultVisible: false,
+        zoomPriority: 8,
+    },
 ];
 
 // =============================================================================
@@ -106,14 +97,8 @@ class WMSLayerManager {
             domains.forEach((domain) => {
                 if (!esriConfig.request.corsEnabledServers.includes(domain)) {
                     esriConfig.request.corsEnabledServers.push(domain);
-                    console.log(`Added CORS domain: ${domain}`);
                 }
             });
-
-            console.log(
-                "CORS enabled servers:",
-                esriConfig.request.corsEnabledServers
-            );
         });
     }
 
@@ -187,12 +172,14 @@ class WMSLayerManager {
 
                 for (let layer of layers) {
                     const nameElement = layer.getElementsByTagName("Name")[0];
+
                     if (
                         nameElement &&
                         nameElement.textContent.includes(layerName)
                     ) {
                         const bboxElement =
                             layer.getElementsByTagName("BoundingBox")[0];
+
                         if (bboxElement) {
                             this.performWMSZoom(bboxElement);
                             return;
@@ -212,7 +199,9 @@ class WMSLayerManager {
      */
     async performWMSZoom(bboxElement) {
         // Lấy MapInstance để dùng hàm performZoom chung
+
         const mapInstance = MAP_INSTANCES.get(this.view.container.id);
+        console.log({ bboxElement, mapInstance });
         if (!mapInstance) {
             console.error("Map instance not found");
             return;
@@ -2089,12 +2078,38 @@ class ControlManager {
         });
 
         // Khởi tạo BasemapGallery
-        require(["esri/widgets/BasemapGallery"], (BasemapGallery) => {
-            new BasemapGallery({
-                view: this.view,
-                container: basemapControl.contentContainer,
-            });
-        });
+        this.createTrueModernBasemapGallery(basemapControl.contentContainer);
+    }
+
+    /**
+     * Tạo basemap gallery với web component (NO WARNINGS)
+     */
+    async createTrueModernBasemapGallery(container) {
+        try {
+            // Tạo web component
+            const basemapGallery = document.createElement(
+                "arcgis-basemap-gallery"
+            );
+
+            // Set properties
+            basemapGallery.style.cssText = `
+                width: 100%;
+                height: 400px;
+                border: none;
+                display: block;
+            `;
+
+            // Thêm vào DOM trước
+            container.appendChild(basemapGallery);
+
+            // Set view reference
+            basemapGallery.view = this.view;
+
+            // Optional - set additional properties
+            basemapGallery.headingLevel = 4;
+        } catch (error) {
+            console.error("createTrueModernBasemapGallery failed:", error);
+        }
     }
 
     /**
@@ -2259,10 +2274,6 @@ class MapInstance {
             ? [...DEFAULT_WMS_LAYERS, ...options.wmsLayers] // Merge: default + custom
             : DEFAULT_WMS_LAYERS; // Chỉ dùng default
 
-        console.log({
-            DEFAULT_WMS_LAYERS,
-            mergedWMSLayers,
-        });
         // Tách wmsLayers ra khỏi options
         const { wmsLayers, ...restOptions } = options;
 
@@ -2328,9 +2339,6 @@ class MapInstance {
             this.setupEventHandlers();
 
             this.isInitialized = true;
-            console.log(
-                `Map instance ${this.containerId} initialized successfully`
-            );
 
             return this;
         } catch (error) {
@@ -2373,9 +2381,6 @@ class MapInstance {
 
                     this.view
                         .when(() => {
-                            console.log(
-                                `View for ${this.containerId} loaded successfully`
-                            );
                             resolve();
                         })
                         .catch(reject);
@@ -2510,7 +2515,6 @@ class MapInstance {
                 easing: zoomOptions.easing,
             })
             .then(() => {
-                console.log("Zoom completed successfully");
                 resolve();
             })
             .catch((error) => {
@@ -2557,10 +2561,17 @@ class MapInstance {
         }
 
         // Watch updating state
-        this.view.watch("updating", (val) => {
-            if (!val) {
-                console.log(`Map ${this.containerId} loaded completely`);
-            }
+        require(["esri/core/reactiveUtils"], (reactiveUtils) => {
+            reactiveUtils.watch(
+                () => this.view.updating,
+                (updating) => {
+                    if (!updating) {
+                        console.log(
+                            `Map ${this.containerId} loaded completely`
+                        );
+                    }
+                }
+            );
         });
     }
 
