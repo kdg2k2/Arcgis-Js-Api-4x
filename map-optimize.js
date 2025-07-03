@@ -168,6 +168,7 @@ class WMSLayerManager {
         }
 
         const capsURL = `${wmsUrl}?SERVICE=WMS&REQUEST=GetCapabilities&VERSION=1.3.0`;
+        layerName = layerName.split(":")[1];
 
         fetch(capsURL)
             .then((response) => {
@@ -214,14 +215,13 @@ class WMSLayerManager {
         try {
             // Chuyển từ WMS URL sang WFS URL
             const wfsUrl = this.generateWFSUrl(wmsUrl);
-            const typeName = `ws_ranhgioi:${layerName}`;
 
             // Tạo WFS request để lấy features với filter
             const wfsParams = new URLSearchParams({
                 service: "WFS",
                 version: "1.1.0",
                 request: "GetFeature",
-                typeName: typeName,
+                typeName: layerName,
                 outputFormat: "application/json",
                 srsName: "EPSG:4326",
                 maxFeatures: 100,
@@ -250,7 +250,7 @@ class WMSLayerManager {
             // Zoom đến bounding box
             await this.zoomToBounds(bounds);
         } catch (error) {
-            console.error("❌ Error zooming to filtered extent:", error);
+            console.error("Error zooming to filtered extent:", error);
             // Fallback: zoom bằng phương pháp cũ
             this.zoomToWMSExtent(wmsUrl, layerName, null);
         }
@@ -453,10 +453,7 @@ class WMSLayerManager {
                         visibleLayers.length > 0 &&
                         visibleLayers[0].id === wmsId
                     ) {
-                        this.zoomToWMSExtent(
-                            wmsConfig.url,
-                            wmsConfig.layer.split(":")[1]
-                        );
+                        this.zoomToWMSExtent(wmsConfig.url, wmsConfig.layer);
                     }
                 })
                 .catch((error) => {
@@ -562,7 +559,7 @@ class WMSLayerManager {
                     const highestPriorityLayer = defaultLayers[0];
                     this.zoomToWMSExtent(
                         highestPriorityLayer.url,
-                        highestPriorityLayer.layer.split(":")[1]
+                        highestPriorityLayer.layer
                     );
                 }
             })
@@ -2158,7 +2155,7 @@ class SketchManager {
      * Hiển thị thông báo lỗi
      */
     showSaveError(errorMessage) {
-        this.showNotification(`❌ Lỗi khi lưu: ${errorMessage}`, "error");
+        this.showNotification(`Lỗi khi lưu: ${errorMessage}`, "error");
     }
 
     /**

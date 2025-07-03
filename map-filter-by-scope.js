@@ -1,355 +1,161 @@
-/**
- * =============================================================================
- * MAP FILTERS - XỬ LÝ SELECT VÀ CQL FILTER
- * =============================================================================
- *
- * Kế thừa logic từ map-optimize.js để xử lý filter theo province/commune
- */
-
-// =============================================================================
-// BIẾN TOÀN CỤC
-// =============================================================================
-
-let mapInstance = null;
-let wmsManager = null;
-let currentFilters = {
-    province: null,
-    commune: null,
+// Constants
+const DELAY_MS = 1000;
+const LAYER_NAMES = {
+    PROVINCE: "ws_ranhgioi:rg_vn_tinh",
+    COMMUNE: "ws_ranhgioi:rg_vn_xa",
+    EUDR: "_2025_EUDR:gardens",
 };
 
-// =============================================================================
-// KHỞI TẠO MAP VÀ SETUP
-// =============================================================================
+// State
+const state = {
+    mapInstance: null,
+    wmsManager: null,
+    configs: {},
+    currentFilters: {
+        province: null,
+        commune: null,
+    },
+};
 
 /**
- * Khởi tạo map với full chức năng và setup events
+ * Khởi tạo map và setup
  */
 async function initializeMap() {
     try {
-        // Khởi tạo map với full chức năng
-        mapInstance = await initMap3D("mapDiv");
-        wmsManager = mapInstance.getWMSManager();
+        state.mapInstance = await initMap3D("map-step-1");
+        state.wmsManager = state.mapInstance.getWMSManager();
 
-        // Setup events cho select elements
+        // Cache configs
+        state.configs = {
+            province: state.wmsManager.getWmsConfigWithNameLayer(
+                LAYER_NAMES.PROVINCE
+            ),
+            commune: state.wmsManager.getWmsConfigWithNameLayer(
+                LAYER_NAMES.COMMUNE
+            ),
+            eudr: state.wmsManager.getWmsConfigWithNameLayer(LAYER_NAMES.EUDR),
+        };
+
         setupSelectEvents();
-
-        // Mặc định hiển thị WMS tỉnh (đã được load sẵn do defaultVisible: true)
     } catch (error) {
-        console.error("❌ Failed to initialize map:", error);
+        console.error("Failed to initialize map:", error);
     }
 }
 
 /**
- * Setup events cho các select elements
+ * Setup events cho select elements
  */
 function setupSelectEvents() {
-    const provinceSelect = document.getElementById("step-1-province-select");
-    const communeSelect = document.getElementById("step-1-commune-select");
+    const elements = {
+        province: document.getElementById("step-1-province-select"),
+        commune: document.getElementById("step-1-commune-select"),
+    };
 
-    if (provinceSelect) {
-        provinceSelect.addEventListener("change", handleProvinceChange);
-    }
+    elements.province?.addEventListener("change", handleProvinceChange);
+    elements.commune?.addEventListener("change", handleCommuneChange);
+}
 
-    if (communeSelect) {
-        communeSelect.addEventListener("change", handleCommuneChange);
+/**
+ * Helper để update WMS layer
+ */
+async function updateWMSLayer(configKey, cqlFilter = null, shouldZoom = false) {
+    const config = state.configs[configKey];
+    if (!config) return;
+
+    // Remove existing
+    state.wmsManager.removeWMSLayer(config.id);
+
+    // Add with filter
+    if (cqlFilter) {
+        await state.wmsManager.createAndAddWMSLayer(config, { cqlFilter });
+
+        if (shouldZoom) {
+            setTimeout(() => {
+                state.wmsManager.zoomToWMSExtent(
+                    config.url,
+                    config.layer,
+                    cqlFilter
+                );
+            }, DELAY_MS);
+        }
     }
 }
 
-// =============================================================================
-// XỬ LÝ SỰ KIỆN PROVINCE SELECT
-// =============================================================================
-
 /**
- * Xử lý khi change province select
- * @param {Event} event - Change event
+ * Xử lý change province
  */
 async function handleProvinceChange(event) {
     const provinceCode = event.target.value;
 
     if (!provinceCode) {
-        // Reset về trạng thái ban đầu
         await resetToDefault();
         return;
     }
 
-    // Lưu filter hiện tại
-    currentFilters.province = provinceCode;
-    currentFilters.commune = null;
+    state.currentFilters.province = provinceCode;
+    state.currentFilters.commune = null;
 
-    // Reset commune select
-    resetCommuneSelect();
+    // fillCommuneSelect(provinceCode);
 
     try {
-        // 1. Hiển thị WMS tỉnh với filter
-        await showProvinceWithFilter(provinceCode);
-
-        // 2. Hiển thị WMS xã với filter theo tỉnh
-        await showCommuneLayerByProvince(provinceCode);
-
-        // 3. Hiển thị WMS EUDR với filter theo tỉnh
-        await showEUDRLayerByProvince(provinceCode);
+        await Promise.all([
+            updateWMSLayer("province", `MATINH='${provinceCode}'`, true),
+            updateWMSLayer("commune", `MATINH='${provinceCode}'`),
+            updateWMSLayer("eudr", `province_code='${provinceCode}'`),
+        ]);
     } catch (error) {
-        console.error("❌ Error applying province filter:", error);
+        console.error("Error applying province filter:", error);
     }
 }
 
 /**
- * Hiển thị WMS tỉnh với CQL filter
- * @param {string} provinceCode - Mã tỉnh
- */
-async function showProvinceWithFilter(provinceCode) {
-    const provinceConfig = {
-        id: "wms_1",
-        name: "Ranh giới tỉnh",
-        url: "https://bando.ifee.edu.vn:8453/geoserver/ws_ranhgioi/wms",
-        layer: "ws_ranhgioi:rg_vn_tinh",
-        version: "1.1.1",
-        defaultVisible: true,
-        zoomPriority: 10,
-    };
-
-    // Remove existing layer
-    wmsManager.removeWMSLayer("wms_1");
-
-    // Add with CQL filter
-    await wmsManager.createAndAddWMSLayer(provinceConfig, {
-        cqlFilter: `MATINH='${provinceCode}'`,
-    });
-
-    // Zoom to filtered province extent
-    setTimeout(() => {
-        wmsManager.zoomToWMSExtent(
-            provinceConfig.url,
-            provinceConfig.layer.split(":")[1],
-            `MATINH='${provinceCode}'`
-        );
-    }, 1000);
-}
-
-/**
- * Hiển thị WMS xã theo tỉnh
- * @param {string} provinceCode - Mã tỉnh
- */
-async function showCommuneLayerByProvince(provinceCode) {
-    const communeConfig = {
-        id: "wms_2",
-        name: "Ranh giới xã",
-        url: "https://bando.ifee.edu.vn:8453/geoserver/ws_ranhgioi/wms",
-        layer: "ws_ranhgioi:rg_vn_xa",
-        version: "1.1.1",
-        defaultVisible: false,
-        zoomPriority: 9,
-    };
-
-    // Remove existing layer if any
-    wmsManager.removeWMSLayer("wms_2");
-
-    // Add with CQL filter
-    await wmsManager.createAndAddWMSLayer(communeConfig, {
-        cqlFilter: `MATINH='${provinceCode}'`,
-    });
-
-    // Update UI button state
-    wmsManager.updateButtonStateForLayer("wms_2", true);
-}
-
-/**
- * Hiển thị WMS EUDR theo tỉnh
- * @param {string} provinceCode - Mã tỉnh
- */
-async function showEUDRLayerByProvince(provinceCode) {
-    const eudrConfig = {
-        id: "wms_3",
-        name: "EUDR",
-        url: "https://maps-150.ifee.edu.vn:8453/geoserver/_2025_EUDR/wms",
-        layer: "_2025_EUDR:gardens",
-        version: "1.1.1",
-        defaultVisible: false,
-        zoomPriority: 8,
-    };
-
-    // Remove existing layer if any
-    wmsManager.removeWMSLayer("wms_3");
-
-    // Add with CQL filter
-    await wmsManager.createAndAddWMSLayer(eudrConfig, {
-        cqlFilter: `province_code='${provinceCode}'`,
-    });
-
-    // Update UI button state
-    wmsManager.updateButtonStateForLayer("wms_3", true);
-}
-
-// =============================================================================
-// XỬ LÝ SỰ KIỆN COMMUNE SELECT
-// =============================================================================
-
-/**
- * Xử lý khi change commune select
- * @param {Event} event - Change event
+ * Xử lý change commune
  */
 async function handleCommuneChange(event) {
     const communeCode = event.target.value;
 
-    if (!communeCode) {
-        // Quay lại hiển thị theo province
-        if (currentFilters.province) {
-            await handleProvinceChange({
-                target: { value: currentFilters.province },
-            });
-        }
+    if (!communeCode && state.currentFilters.province) {
+        await handleProvinceChange({
+            target: { value: state.currentFilters.province },
+        });
         return;
     }
 
-    // Lưu filter hiện tại
-    currentFilters.commune = communeCode;
+    state.currentFilters.commune = communeCode;
 
     try {
-        // 1. Gỡ hiển thị WMS tỉnh
-        await hideProvinceLayer();
-
-        // 2. Hiển thị WMS xã với filter theo xã
-        await showCommuneWithFilter(communeCode);
-
-        // 3. Hiển thị WMS EUDR với filter theo xã
-        await showEUDRLayerByCommune(communeCode);
+        await Promise.all([
+            updateWMSLayer("province"), // Remove province layer
+            updateWMSLayer("commune", `MAXA='${communeCode}'`, true),
+            updateWMSLayer("eudr", `commune_code='${communeCode}'`),
+        ]);
     } catch (error) {
-        console.error("❌ Error applying commune filter:", error);
+        console.error("Error applying commune filter:", error);
     }
 }
 
 /**
- * Ẩn layer tỉnh
- */
-async function hideProvinceLayer() {
-    wmsManager.removeWMSLayer("wms_1");
-    wmsManager.updateButtonStateForLayer("wms_1", false);
-}
-
-/**
- * Hiển thị WMS xã với CQL filter theo xã
- * @param {string} communeCode - Mã xã
- */
-async function showCommuneWithFilter(communeCode) {
-    const communeConfig = {
-        id: "wms_2",
-        name: "Ranh giới xã",
-        url: "https://bando.ifee.edu.vn:8453/geoserver/ws_ranhgioi/wms",
-        layer: "ws_ranhgioi:rg_vn_xa",
-        version: "1.1.1",
-        defaultVisible: false,
-        zoomPriority: 9,
-    };
-
-    // Remove existing layer
-    wmsManager.removeWMSLayer("wms_2");
-
-    // Add with CQL filter
-    await wmsManager.createAndAddWMSLayer(communeConfig, {
-        cqlFilter: `MAXA='${communeCode}'`,
-    });
-
-    // Zoom to filtered commune extent
-    setTimeout(() => {
-        wmsManager.zoomToWMSExtent(
-            communeConfig.url,
-            communeConfig.layer.split(":")[1],
-            `MAXA='${communeCode}'`
-        );
-    }, 1000);
-}
-
-/**
- * Hiển thị WMS EUDR theo xã
- * @param {string} communeCode - Mã xã
- */
-async function showEUDRLayerByCommune(communeCode) {
-    const eudrConfig = {
-        id: "wms_3",
-        name: "EUDR",
-        url: "https://maps-150.ifee.edu.vn:8453/geoserver/_2025_EUDR/wms",
-        layer: "_2025_EUDR:gardens",
-        version: "1.1.1",
-        defaultVisible: false,
-        zoomPriority: 8,
-    };
-
-    // Remove existing layer if any
-    wmsManager.removeWMSLayer("wms_3");
-
-    // Add with CQL filter
-    await wmsManager.createAndAddWMSLayer(eudrConfig, {
-        cqlFilter: `commune_code='${communeCode}'`,
-    });
-
-    // Update UI button state
-    wmsManager.updateButtonStateForLayer("wms_3", true);
-}
-
-// =============================================================================
-// UTILITY FUNCTIONS
-// =============================================================================
-
-/**
- * Reset về trạng thái mặc định
+ * Reset về mặc định
  */
 async function resetToDefault() {
-    // Clear filters
-    currentFilters.province = null;
-    currentFilters.commune = null;
+    // Clear state
+    state.currentFilters = { province: null, commune: null };
 
-    // Reset commune select
-    resetCommuneSelect();
+    // fillProvinceSelect();
+    // fillCommuneSelect(null);
 
-    // Remove all custom filters, restore default
     try {
-        // Remove filtered layers
-        wmsManager.removeWMSLayer("wms_1");
-        wmsManager.removeWMSLayer("wms_2");
-        wmsManager.removeWMSLayer("wms_3");
+        // Remove all layers
+        Object.keys(state.configs).forEach((key) => {
+            state.wmsManager.removeWMSLayer(state.configs[key].id);
+        });
 
-        // Restore default province layer (without filter)
-        const defaultProvinceConfig = {
-            id: "wms_1",
-            name: "Ranh giới tỉnh",
-            url: "https://bando.ifee.edu.vn:8453/geoserver/ws_ranhgioi/wms",
-            layer: "ws_ranhgioi:rg_vn_tinh",
-            version: "1.1.1",
-            defaultVisible: true,
-            zoomPriority: 10,
-        };
-
-        await wmsManager.createAndAddWMSLayer(defaultProvinceConfig);
-
-        // Update UI states
-        wmsManager.updateButtonStateForLayer("wms_1", true);
-        wmsManager.updateButtonStateForLayer("wms_2", false);
-        wmsManager.updateButtonStateForLayer("wms_3", false);
-
-        // Zoom to default extent
-        setTimeout(() => {
-            wmsManager.zoomToWMSExtent(
-                defaultProvinceConfig.url,
-                defaultProvinceConfig.layer.split(":")[1],
-                null // Không có filter = toàn quốc
-            );
-        }, 1000);
+        // Restore default province
+        await updateWMSLayer("province", null, true);
     } catch (error) {
-        console.error("❌ Error resetting to default:", error);
+        console.error("Error resetting:", error);
     }
 }
 
-/**
- * Reset commune select về trạng thái ban đầu
- */
-function resetCommuneSelect() {
-    const communeSelect = document.getElementById("step-1-commune-select");
-    if (communeSelect) {
-        communeSelect.value = "";
-    }
-}
-
-// Tự động khởi tạo khi DOM ready
-document.addEventListener("DOMContentLoaded", function () {
-    initializeMap();
-});
+// Initialize on DOM ready
+document.addEventListener("DOMContentLoaded", initializeMap);
