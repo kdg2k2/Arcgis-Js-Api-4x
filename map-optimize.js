@@ -2281,6 +2281,8 @@ class ControlManager {
         this.wmsManager = wmsManager;
         this.sketchManager = sketchManager;
 
+        this.createFullscreenControl();
+
         // Basemap control
         if (this.options.enableBasemap) {
             this.createBasemapControl();
@@ -2294,6 +2296,64 @@ class ControlManager {
         // Sketch control
         if (this.options.enableSketch && this.sketchManager) {
             this.createSketchControl();
+        }
+    }
+
+    /**
+     * Tạo fullscreen control
+     */
+    createFullscreenControl() {
+        this.createControlButton({
+            id: `fullscreen_${this.view.container.id}`,
+            title: "Toàn màn hình",
+            icon: "fullscreen",
+            buttonClass: "fullscreen-btn",
+            onClick: (button) => {
+                this.toggleFullscreen(button);
+            },
+        });
+    }
+
+    /**
+     * Toggle fullscreen mode
+     */
+    toggleFullscreen(button) {
+        const container = this.view.container;
+
+        if (!document.fullscreenElement) {
+            // Enter fullscreen
+            container
+                .requestFullscreen()
+                .then(() => {
+                    button.innerHTML =
+                        '<span class="bi bi-fullscreen-exit"></span>';
+                    button.setAttribute("title", "Thoát toàn màn hình");
+
+                    // Thêm class để style fullscreen
+                    container.classList.add("arcgis-fullscreen");
+
+                    // Trigger resize bằng cách dispatch resize event
+                    setTimeout(() => {
+                        window.dispatchEvent(new Event("resize"));
+                    }, 100);
+                })
+                .catch((err) => {
+                    console.error("Error entering fullscreen:", err);
+                });
+        } else {
+            // Exit fullscreen
+            document.exitFullscreen().then(() => {
+                button.innerHTML = '<span class="bi bi-fullscreen"></span>';
+                button.setAttribute("title", "Toàn màn hình");
+
+                // Remove fullscreen class
+                container.classList.remove("arcgis-fullscreen");
+
+                // Trigger resize event
+                setTimeout(() => {
+                    window.dispatchEvent(new Event("resize"));
+                }, 100);
+            });
         }
     }
 

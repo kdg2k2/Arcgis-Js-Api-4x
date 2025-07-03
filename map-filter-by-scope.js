@@ -22,7 +22,7 @@ const state = {
  */
 async function initializeMap() {
     try {
-        state.mapInstance = await initMap3D("map-step-1");
+        state.mapInstance = await initMap3D("mapDiv");
         state.wmsManager = state.mapInstance.getWMSManager();
 
         // Cache configs
