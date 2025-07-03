@@ -151,11 +151,18 @@ class WMSLayerManager {
     }
 
     /**
-     * Zoom đến extent của WMS layer dựa trên GetCapabilities
+     * Zoom đến extent của WMS layer dựa trên GetCapabilities hoặc WFS với CQL filter
      * @param {string} wmsUrl - URL của WMS service
      * @param {string} layerName - Tên layer cần zoom đến
+     * @param {string} cqlFilter - CQL filter để giới hạn extent (optional)
      */
-    zoomToWMSExtent(wmsUrl, layerName) {
+    zoomToWMSExtent(wmsUrl, layerName, cqlFilter = null) {
+        // Nếu có CQL filter, sử dụng WFS để lấy extent chính xác
+        if (cqlFilter) {
+            this.zoomToFilteredExtent(wmsUrl, layerName, cqlFilter);
+            return;
+        }
+
         const capsURL = `${wmsUrl}?SERVICE=WMS&REQUEST=GetCapabilities&VERSION=1.3.0`;
 
         fetch(capsURL)
@@ -194,6 +201,128 @@ class WMSLayerManager {
     }
 
     /**
+     * Zoom đến extent của features được filter bằng CQL
+     * @param {string} wmsUrl - URL của WMS service
+     * @param {string} layerName - Tên layer
+     * @param {string} cqlFilter - CQL filter
+     */
+    async zoomToFilteredExtent(wmsUrl, layerName, cqlFilter) {
+        try {
+            // Chuyển từ WMS URL sang WFS URL
+            const wfsUrl = wmsUrl.replace("/wms", "/wfs");
+            const typeName = `ws_ranhgioi:${layerName}`;
+
+            // Tạo WFS request để lấy features với filter
+            const wfsParams = new URLSearchParams({
+                service: "WFS",
+                version: "1.1.0",
+                request: "GetFeature",
+                typeName: typeName,
+                outputFormat: "application/json",
+                srsName: "EPSG:4326",
+                maxFeatures: 100,
+                CQL_FILTER: cqlFilter,
+            });
+
+            const wfsRequestUrl = `${wfsUrl}?${wfsParams.toString()}`;
+
+            const response = await fetch(wfsRequestUrl);
+            if (!response.ok) {
+                throw new Error(`WFS request failed: ${response.status}`);
+            }
+
+            const geojson = await response.json();
+
+            if (!geojson.features || geojson.features.length === 0) {
+                console.warn("No features found for filter:", cqlFilter);
+                // Fallback: zoom bằng phương pháp GetCapabilities
+                this.zoomToWMSExtent(wmsUrl, layerName, null);
+                return;
+            }
+
+            // Tính bounding box của tất cả features
+            const bounds = this.calculateBounds(geojson.features);
+
+            // Zoom đến bounding box
+            await this.zoomToBounds(bounds);
+        } catch (error) {
+            console.error("❌ Error zooming to filtered extent:", error);
+            // Fallback: zoom bằng phương pháp cũ
+            this.zoomToWMSExtent(wmsUrl, layerName, null);
+        }
+    }
+
+    /**
+     * Tính bounding box từ danh sách features GeoJSON
+     * @param {Array} features - Danh sách GeoJSON features
+     * @returns {Object} Bounding box {xmin, ymin, xmax, ymax}
+     */
+    calculateBounds(features) {
+        let xmin = Infinity,
+            ymin = Infinity;
+        let xmax = -Infinity,
+            ymax = -Infinity;
+
+        features.forEach((feature) => {
+            const geometry = feature.geometry;
+
+            if (geometry.type === "Polygon") {
+                geometry.coordinates[0].forEach((coord) => {
+                    const [x, y] = coord;
+                    xmin = Math.min(xmin, x);
+                    ymin = Math.min(ymin, y);
+                    xmax = Math.max(xmax, x);
+                    ymax = Math.max(ymax, y);
+                });
+            } else if (geometry.type === "MultiPolygon") {
+                geometry.coordinates.forEach((polygon) => {
+                    polygon[0].forEach((coord) => {
+                        const [x, y] = coord;
+                        xmin = Math.min(xmin, x);
+                        ymin = Math.min(ymin, y);
+                        xmax = Math.max(xmax, x);
+                        ymax = Math.max(ymax, y);
+                    });
+                });
+            }
+        });
+
+        return { xmin, ymin, xmax, ymax };
+    }
+
+    /**
+     * Zoom đến bounding box
+     * @param {Object} bounds - Bounding box {xmin, ymin, xmax, ymax}
+     */
+    async zoomToBounds(bounds) {
+        const mapInstance = MAP_INSTANCES.get(this.view.container.id);
+        if (!mapInstance) {
+            console.error("Map instance not found for zoom");
+            return;
+        }
+
+        try {
+            await mapInstance.performZoom(
+                {
+                    type: "extent",
+                    xmin: bounds.xmin,
+                    ymin: bounds.ymin,
+                    xmax: bounds.xmax,
+                    ymax: bounds.ymax,
+                    z: 800000,
+                },
+                {
+                    delay: 500, // Delay ngắn hơn cho responsive
+                    duration: 2000, // Zoom nhanh hơn
+                    expandFactor: 1.1, // Ít buffer cho chính xác hơn
+                }
+            );
+        } catch (error) {
+            console.error("Error zooming to bounds:", error);
+        }
+    }
+
+    /**
      * Thực hiện zoom đến extent được chỉ định
      * @param {Element} bboxElement - DOM element chứa thông tin BoundingBox
      */
@@ -201,7 +330,6 @@ class WMSLayerManager {
         // Lấy MapInstance để dùng hàm performZoom chung
 
         const mapInstance = MAP_INSTANCES.get(this.view.container.id);
-        console.log({ bboxElement, mapInstance });
         if (!mapInstance) {
             console.error("Map instance not found");
             return;
@@ -1587,7 +1715,6 @@ class SketchManager {
                 });
 
                 this.trackChanges();
-                console.log(`Split polygon into ${splitResult.length} parts`);
             } else {
                 alert(
                     "Không thể tách polygon. Đảm bảo đường cắt đi qua polygon."
@@ -2621,7 +2748,6 @@ class MapInstance {
             MAP_INSTANCES.delete(this.containerId);
 
             this.isInitialized = false;
-            console.log(`Map instance ${this.containerId} destroyed`);
         } catch (error) {
             console.error(
                 `Error destroying map instance ${this.containerId}:`,

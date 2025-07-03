@@ -2,7 +2,7 @@
  * =============================================================================
  * MAP FILTERS - XỬ LÝ SELECT VÀ CQL FILTER
  * =============================================================================
- * 
+ *
  * Kế thừa logic từ map-optimize.js để xử lý filter theo province/commune
  */
 
@@ -14,7 +14,7 @@ let mapInstance = null;
 let wmsManager = null;
 let currentFilters = {
     province: null,
-    commune: null
+    commune: null,
 };
 
 // =============================================================================
@@ -29,15 +29,11 @@ async function initializeMap() {
         // Khởi tạo map với full chức năng
         mapInstance = await initMap3D("mapDiv");
         wmsManager = mapInstance.getWMSManager();
-        
-        console.log("✅ Map initialized successfully");
-        
+
         // Setup events cho select elements
         setupSelectEvents();
-        
+
         // Mặc định hiển thị WMS tỉnh (đã được load sẵn do defaultVisible: true)
-        console.log("✅ Default WMS layers loaded");
-        
     } catch (error) {
         console.error("❌ Failed to initialize map:", error);
     }
@@ -47,18 +43,16 @@ async function initializeMap() {
  * Setup events cho các select elements
  */
 function setupSelectEvents() {
-    const provinceSelect = document.getElementById('step-1-province-select');
-    const communeSelect = document.getElementById('step-1-commune-select');
-    
+    const provinceSelect = document.getElementById("step-1-province-select");
+    const communeSelect = document.getElementById("step-1-commune-select");
+
     if (provinceSelect) {
-        provinceSelect.addEventListener('change', handleProvinceChange);
+        provinceSelect.addEventListener("change", handleProvinceChange);
     }
-    
+
     if (communeSelect) {
-        communeSelect.addEventListener('change', handleCommuneChange);
+        communeSelect.addEventListener("change", handleCommuneChange);
     }
-    
-    console.log("✅ Select events setup complete");
 }
 
 // =============================================================================
@@ -71,34 +65,29 @@ function setupSelectEvents() {
  */
 async function handleProvinceChange(event) {
     const provinceCode = event.target.value;
-    
-    console.log(`🏞️ Province changed: ${provinceCode}`);
-    
+
     if (!provinceCode) {
         // Reset về trạng thái ban đầu
         await resetToDefault();
         return;
     }
-    
+
     // Lưu filter hiện tại
     currentFilters.province = provinceCode;
     currentFilters.commune = null;
-    
+
     // Reset commune select
     resetCommuneSelect();
-    
+
     try {
         // 1. Hiển thị WMS tỉnh với filter
         await showProvinceWithFilter(provinceCode);
-        
+
         // 2. Hiển thị WMS xã với filter theo tỉnh
         await showCommuneLayerByProvince(provinceCode);
-        
+
         // 3. Hiển thị WMS EUDR với filter theo tỉnh
         await showEUDRLayerByProvince(provinceCode);
-        
-        console.log("✅ Province filter applied successfully");
-        
     } catch (error) {
         console.error("❌ Error applying province filter:", error);
     }
@@ -118,24 +107,23 @@ async function showProvinceWithFilter(provinceCode) {
         defaultVisible: true,
         zoomPriority: 10,
     };
-    
+
     // Remove existing layer
     wmsManager.removeWMSLayer("wms_1");
-    
+
     // Add with CQL filter
     await wmsManager.createAndAddWMSLayer(provinceConfig, {
-        cqlFilter: `MATINH='${provinceCode}'`
+        cqlFilter: `MATINH='${provinceCode}'`,
     });
-    
-    // Zoom to filtered province
+
+    // Zoom to filtered province extent
     setTimeout(() => {
         wmsManager.zoomToWMSExtent(
             provinceConfig.url,
-            provinceConfig.layer.split(":")[1]
+            provinceConfig.layer.split(":")[1],
+            `MATINH='${provinceCode}'`
         );
     }, 1000);
-    
-    console.log(`🗺️ Province layer filtered: MATINH='${provinceCode}'`);
 }
 
 /**
@@ -152,18 +140,17 @@ async function showCommuneLayerByProvince(provinceCode) {
         defaultVisible: false,
         zoomPriority: 9,
     };
-    
+
     // Remove existing layer if any
     wmsManager.removeWMSLayer("wms_2");
-    
+
     // Add with CQL filter
     await wmsManager.createAndAddWMSLayer(communeConfig, {
-        cqlFilter: `MATINH='${provinceCode}'`
+        cqlFilter: `MATINH='${provinceCode}'`,
     });
-    
+
     // Update UI button state
-    
-    console.log(`🏘️ Commune layer filtered: MATINH='${provinceCode}'`);
+    wmsManager.updateButtonStateForLayer("wms_2", true);
 }
 
 /**
@@ -180,18 +167,17 @@ async function showEUDRLayerByProvince(provinceCode) {
         defaultVisible: false,
         zoomPriority: 8,
     };
-    
+
     // Remove existing layer if any
     wmsManager.removeWMSLayer("wms_3");
-    
+
     // Add with CQL filter
     await wmsManager.createAndAddWMSLayer(eudrConfig, {
-        cqlFilter: `province_code='${provinceCode}'`
+        cqlFilter: `province_code='${provinceCode}'`,
     });
-    
+
     // Update UI button state
-    
-    console.log(`🌱 EUDR layer filtered: province_code='${provinceCode}'`);
+    wmsManager.updateButtonStateForLayer("wms_3", true);
 }
 
 // =============================================================================
@@ -204,32 +190,29 @@ async function showEUDRLayerByProvince(provinceCode) {
  */
 async function handleCommuneChange(event) {
     const communeCode = event.target.value;
-    
-    console.log(`🏘️ Commune changed: ${communeCode}`);
-    
+
     if (!communeCode) {
         // Quay lại hiển thị theo province
         if (currentFilters.province) {
-            await handleProvinceChange({ target: { value: currentFilters.province } });
+            await handleProvinceChange({
+                target: { value: currentFilters.province },
+            });
         }
         return;
     }
-    
+
     // Lưu filter hiện tại
     currentFilters.commune = communeCode;
-    
+
     try {
         // 1. Gỡ hiển thị WMS tỉnh
         await hideProvinceLayer();
-        
+
         // 2. Hiển thị WMS xã với filter theo xã
         await showCommuneWithFilter(communeCode);
-        
+
         // 3. Hiển thị WMS EUDR với filter theo xã
         await showEUDRLayerByCommune(communeCode);
-        
-        console.log("✅ Commune filter applied successfully");
-        
     } catch (error) {
         console.error("❌ Error applying commune filter:", error);
     }
@@ -240,7 +223,7 @@ async function handleCommuneChange(event) {
  */
 async function hideProvinceLayer() {
     wmsManager.removeWMSLayer("wms_1");
-    console.log("🚫 Province layer hidden");
+    wmsManager.updateButtonStateForLayer("wms_1", false);
 }
 
 /**
@@ -257,24 +240,23 @@ async function showCommuneWithFilter(communeCode) {
         defaultVisible: false,
         zoomPriority: 9,
     };
-    
+
     // Remove existing layer
     wmsManager.removeWMSLayer("wms_2");
-    
+
     // Add with CQL filter
     await wmsManager.createAndAddWMSLayer(communeConfig, {
-        cqlFilter: `MAXA='${communeCode}'`
+        cqlFilter: `MAXA='${communeCode}'`,
     });
-    
-    // Zoom to filtered commune
+
+    // Zoom to filtered commune extent
     setTimeout(() => {
         wmsManager.zoomToWMSExtent(
             communeConfig.url,
-            communeConfig.layer.split(":")[1]
+            communeConfig.layer.split(":")[1],
+            `MAXA='${communeCode}'`
         );
     }, 1000);
-    
-    console.log(`🏘️ Commune layer filtered: MAXA='${communeCode}'`);
 }
 
 /**
@@ -291,18 +273,17 @@ async function showEUDRLayerByCommune(communeCode) {
         defaultVisible: false,
         zoomPriority: 8,
     };
-    
+
     // Remove existing layer if any
     wmsManager.removeWMSLayer("wms_3");
-    
+
     // Add with CQL filter
     await wmsManager.createAndAddWMSLayer(eudrConfig, {
-        cqlFilter: `commune_code='${communeCode}'`
+        cqlFilter: `commune_code='${communeCode}'`,
     });
-    
+
     // Update UI button state
-    
-    console.log(`🌱 EUDR layer filtered: commune_code='${communeCode}'`);
+    wmsManager.updateButtonStateForLayer("wms_3", true);
 }
 
 // =============================================================================
@@ -313,22 +294,20 @@ async function showEUDRLayerByCommune(communeCode) {
  * Reset về trạng thái mặc định
  */
 async function resetToDefault() {
-    console.log("🔄 Resetting to default state");
-    
     // Clear filters
     currentFilters.province = null;
     currentFilters.commune = null;
-    
+
     // Reset commune select
     resetCommuneSelect();
-    
+
     // Remove all custom filters, restore default
     try {
         // Remove filtered layers
         wmsManager.removeWMSLayer("wms_1");
         wmsManager.removeWMSLayer("wms_2");
         wmsManager.removeWMSLayer("wms_3");
-        
+
         // Restore default province layer (without filter)
         const defaultProvinceConfig = {
             id: "wms_1",
@@ -339,21 +318,22 @@ async function resetToDefault() {
             defaultVisible: true,
             zoomPriority: 10,
         };
-        
+
         await wmsManager.createAndAddWMSLayer(defaultProvinceConfig);
-        
+
         // Update UI states
-        
+        wmsManager.updateButtonStateForLayer("wms_1", true);
+        wmsManager.updateButtonStateForLayer("wms_2", false);
+        wmsManager.updateButtonStateForLayer("wms_3", false);
+
         // Zoom to default extent
         setTimeout(() => {
             wmsManager.zoomToWMSExtent(
                 defaultProvinceConfig.url,
-                defaultProvinceConfig.layer.split(":")[1]
+                defaultProvinceConfig.layer.split(":")[1],
+                null // Không có filter = toàn quốc
             );
         }, 1000);
-        
-        console.log("✅ Reset to default complete");
-        
     } catch (error) {
         console.error("❌ Error resetting to default:", error);
     }
@@ -363,87 +343,13 @@ async function resetToDefault() {
  * Reset commune select về trạng thái ban đầu
  */
 function resetCommuneSelect() {
-    const communeSelect = document.getElementById('step-1-commune-select');
+    const communeSelect = document.getElementById("step-1-commune-select");
     if (communeSelect) {
-        communeSelect.value = '';
+        communeSelect.value = "";
     }
 }
 
-/**
- * Lấy thông tin filter hiện tại
- * @returns {Object} Current filters
- */
-function getCurrentFilters() {
-    return { ...currentFilters };
-}
-
-/**
- * Kiểm tra xem có filter nào đang active không
- * @returns {boolean} True nếu có filter active
- */
-function hasActiveFilters() {
-    return !!(currentFilters.province || currentFilters.commune);
-}
-
-/**
- * Log trạng thái hiện tại cho debugging
- */
-function logCurrentState() {
-    console.log("📊 Current State:", {
-        filters: currentFilters,
-        hasActiveFilters: hasActiveFilters(),
-        mapInstance: !!mapInstance,
-        wmsManager: !!wmsManager
-    });
-}
-
-// =============================================================================
-// GLOBAL EXPORTS
-// =============================================================================
-
-// Xuất ra global scope để có thể gọi từ HTML
-window.initializeMap = initializeMap;
-window.handleProvinceChange = handleProvinceChange;
-window.handleCommuneChange = handleCommuneChange;
-window.resetToDefault = resetToDefault;
-window.getCurrentFilters = getCurrentFilters;
-window.hasActiveFilters = hasActiveFilters;
-window.logCurrentState = logCurrentState;
-
-// =============================================================================
-// AUTO INITIALIZATION
-// =============================================================================
-
 // Tự động khởi tạo khi DOM ready
-document.addEventListener('DOMContentLoaded', function() {
-    console.log("🚀 DOM ready, initializing map...");
+document.addEventListener("DOMContentLoaded", function () {
     initializeMap();
 });
-
-/**
- * =============================================================================
- * USAGE EXAMPLES - CÁCH SỬ DỤNG
- * =============================================================================
- * 
- * // Trong HTML:
- * <script src="map-optimize.js"></script>
- * <script src="map-filters.js"></script>
- * 
- * // Map sẽ tự động khởi tạo khi DOM ready
- * 
- * // Có thể gọi manually:
- * initializeMap();
- * 
- * // Debug current state:
- * logCurrentState();
- * 
- * // Reset programmatically:
- * resetToDefault();
- * 
- * // Check filters:
- * if (hasActiveFilters()) {
- *     console.log("Filters active:", getCurrentFilters());
- * }
- * 
- * =============================================================================
- */
