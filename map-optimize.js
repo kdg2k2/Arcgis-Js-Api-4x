@@ -78,6 +78,10 @@ class WMSLayerManager {
         this.setupCORS();
     }
 
+    getWmsConfigWithNameLayer(layer) {
+        return DEFAULT_WMS_LAYERS.find((value, index) => value.layer == layer);
+    }
+
     /**
      * Thiết lập CORS cho các server WMS
      * Cho phép truy cập cross-origin đến các WMS endpoints
@@ -209,7 +213,7 @@ class WMSLayerManager {
     async zoomToFilteredExtent(wmsUrl, layerName, cqlFilter) {
         try {
             // Chuyển từ WMS URL sang WFS URL
-            const wfsUrl = wmsUrl.replace("/wms", "/wfs");
+            const wfsUrl = this.generateWFSUrl(wmsUrl);
             const typeName = `ws_ranhgioi:${layerName}`;
 
             // Tạo WFS request để lấy features với filter
@@ -502,7 +506,6 @@ class WMSLayerManager {
                         this.wmsLayers.set(config.id, wmsLayer);
                         wmsLayer.cqlFilter = cqlFilter;
 
-                        // THÊM: Cập nhật UI button state khi load thành công
                         this.updateButtonStateForLayer(config.id, true);
 
                         resolve(wmsLayer);
@@ -527,6 +530,8 @@ class WMSLayerManager {
         if (wmsLayer) {
             this.map.remove(wmsLayer);
             this.wmsLayers.delete(wmsId);
+
+            this.updateButtonStateForLayer(config.id, false);
         }
     }
 
@@ -968,23 +973,19 @@ class WMSLayerManager {
             captuoi: "Cấp tuổi",
             ddanh: "Địa danh",
             tobando: "Tờ bản đồ",
+            land_type: "Loại đất",
+            area: "Diện tích (ha)",
+            farmer: "Nông hộ",
+            name: "Tên",
+            province: "Tỉnh/Thành phố",
+            commune: "Phường/Xã",
+            province_code: "Mã Tỉnh/Thành phố",
+            commune_code: "Mã Phường/Xã",
+            lon: "Kinh độ (WGS84)",
+            lat: "Vĩ độ (WGS84)",
+            owner: "Chủ rừng",
         };
-        return labelMap[key] || this.formatKeyToLabel(key);
-    }
-
-    /**
-     * Format key thành label khi không có trong mapping
-     * @param {string} key - Key cần format
-     * @returns {string} Label đã format
-     */
-    formatKeyToLabel(key) {
-        return key
-            .split("_")
-            .map(
-                (word) =>
-                    word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
-            )
-            .join(" ");
+        return labelMap[key];
     }
 
     /**
@@ -997,10 +998,13 @@ class WMSLayerManager {
         if (typeof value !== "number") return null;
 
         switch (key) {
+            case "area":
             case "dtich":
                 return { digitSeparator: true, places: 2 };
             case "namtr":
             case "captuoi":
+            case "province_code":
+            case "commune_code":
             case "matinh":
             case "mahuyen":
             case "maxa":
@@ -1010,6 +1014,109 @@ class WMSLayerManager {
                     ? { digitSeparator: true, places: 0 }
                     : { digitSeparator: true, places: 2 };
         }
+    }
+
+    // Hàm fetch GeoJSON feature theo CQL filter (qua WFS)
+    async fetchFeatureGeoJSON(wfsUrl, typeName, cqlFilter, maxFeatures = 1) {
+        // Build WFS GetFeature URL
+        let params = new URLSearchParams({
+            service: "WFS",
+            version: "1.1.0",
+            request: "GetFeature",
+            typeName: typeName,
+            outputFormat: "application/json",
+            srsName: "EPSG:4326",
+            maxFeatures: maxFeatures,
+        });
+        if (cqlFilter) params.append("CQL_FILTER", cqlFilter);
+
+        let fullUrl = `${wfsUrl}?${params.toString()}`;
+        let response = await fetch(fullUrl);
+        let text = await response.text();
+
+        // Kiểm tra nếu là XML (GeoServer trả lỗi/lỗi truy vấn)
+        if (text.trim().startsWith("<")) {
+            // Có thể log ra hoặc parse lấy lỗi
+            console.error("WFS response is XML (likely an error):", text);
+            throw new Error("WFS server returned error or no feature: " + text);
+        }
+        // Nếu là JSON thì parse tiếp
+        try {
+            return JSON.parse(text);
+        } catch (e) {
+            console.error("Failed to parse WFS JSON:", text);
+            throw e;
+        }
+    }
+
+    // Hàm sinh WFS url từ WMS url nếu cần
+    generateWFSUrl(wmsUrl) {
+        // Thay thế phần /wms bằng /wfs (cách phổ biến trên Geoserver)
+        return wmsUrl.replace(/\/wms(\?.*)?$/, "/wfs");
+    }
+
+    // Hàm highlight feature theo kết quả truy vấn
+    async highlightSelectedFeatureArcgis(wmsConfig, cqlFilter) {
+        try {
+            const wfsUrl = this.generateWFSUrl(wmsConfig.url);
+            let geojson = await this.fetchFeatureGeoJSON(
+                wfsUrl,
+                wmsConfig.layer, // hoặc .layers tùy cấu hình
+                cqlFilter,
+                100
+            );
+            if (!geojson || !geojson.features || geojson.features.length === 0)
+                return;
+            this.highlightPolygonOnMap(this.view, geojson, "highlightLotLayer");
+        } catch (err) {
+            console.error("Highlight feature error:", err);
+        }
+    }
+
+    highlightPolygonOnMap(view, geojson, layerId = "highlightLotLayer") {
+        require([
+            "esri/geometry/Polygon",
+            "esri/Graphic",
+            "esri/layers/GraphicsLayer",
+            "esri/Color",
+        ], function (Polygon, Graphic, GraphicsLayer, Color) {
+            // Xóa layer cũ nếu có
+            let oldLayer = view.map.findLayerById(layerId);
+            if (oldLayer) {
+                view.map.remove(oldLayer);
+            }
+            // Tạo layer mới
+            let highlightLayer = new GraphicsLayer({ id: layerId });
+
+            geojson.features.forEach((f) => {
+                let geom = f.geometry;
+                if (geom.type === "Polygon" || geom.type === "MultiPolygon") {
+                    // Chuẩn hóa rings
+                    let rings =
+                        geom.type === "Polygon"
+                            ? geom.coordinates
+                            : geom.coordinates.flat();
+                    let polygon = new Polygon({
+                        rings: rings,
+                        spatialReference: { wkid: 4326 },
+                    });
+                    let graphic = new Graphic({
+                        geometry: polygon,
+                        symbol: {
+                            type: "simple-fill",
+                            color: [255, 247, 188, 0.2],
+                            outline: {
+                                color: [255, 255, 134, 1],
+                                width: 2,
+                            },
+                        },
+                    });
+                    highlightLayer.add(graphic);
+                }
+            });
+
+            view.map.add(highlightLayer);
+        });
     }
 }
 
