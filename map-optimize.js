@@ -1668,6 +1668,13 @@ class SketchManager {
             }
 
             this.trackChanges();
+
+            // Auto select pointer tool
+            setTimeout(() => {
+                if (this.sketch && typeof this.sketch.cancel === "function") {
+                    this.sketch.cancel();
+                }
+            }, 100);
         } catch (error) {
             console.error("Error during merge:", error);
         }
